@@ -3,10 +3,18 @@ import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
-from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam as Message
+
+from .results import (
+    AgentResult,
+    FileContent,
+    ImageContent,
+    JsonContent,
+    ResultContent,
+    TextContent,
+)
 
 
 @dataclass
@@ -43,16 +51,29 @@ class Context:
 
 class Agent:
     ctx: Context
-    def __init__(self, ctx: Context | None,) -> None:
-        pass
+    api_key: str
+    base_url: str
+    model: str
+    system_prompt: str
+
+    def __init__(self, ctx: Context | None, config: dict[str, Any], system_prompt: str | None) -> None:
+        if ctx is None:
+            self.ctx = Context()
+        else:
+            self.ctx = ctx
+
+        self.api_key = config["LLM"]["API_KEY"]
+        self.base_url = config["LLM"]["BASE_URL"]
+        self.model = config["LLM"]["MODEL"]
+        if system_prompt is None:
+            with open("system_prompt.md",encoding = "utf-8") as file:
+                self.system_prompt = file.read()
+
+    def next(self) -> AgentResult:
+        raise NotImplementedError("Agent execution is not implemented yet")
 
 
 def main() -> None:
     # config load
     with open("config.toml", "rb") as file:
         config = tomllib.load(file)
-
-    api_key = config["LLM"]["API_KEY"]
-    base_url = config["LLM"]["BASE_URL"]
-    model = config["LLM"]["MODEL"]
-
