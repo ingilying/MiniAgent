@@ -1,60 +1,100 @@
-import json
 import unittest
+from unittest.mock import MagicMock
 
-from miniagent import AgentResult, FileContent, ImageContent, JsonContent, TextContent
+from openai.types.chat import ChatCompletionChunk
+
+from miniagent import ResultStream, TextChunk, RawToolUse
 
 
-class AgentResultTests(unittest.TestCase):
-    def test_mixed_content_wire_contract(self) -> None:
-        result = AgentResult(
-            id="message-1",
-            context_id="context-1",
-            content=[
-                TextContent("# 你好", format="markdown"),
-                ImageContent("/assets/chart.png", alt="Sales chart"),
-                FileContent("/assets/report.pdf", "report.pdf", "application/pdf"),
-                JsonContent({"count": 2, "rows": [True, None]}),
-            ],
+def chunk(delta=None, finish_reason=None, index=0):
+    return ChatCompletionChunk(
+        id="completion-1",
+        created=0,
+        model="test",
+        object="chat.completion.chunk",
+        choices=[] if delta is None else [
+            {"index": index, "delta": delta, "finish_reason": finish_reason},
+        ],
+    )
+
+
+def stream(*chunks):
+    source = MagicMock()
+    source.__iter__.return_value = iter(chunks)
+    return ResultStream(source)
+
+
+class ResultStreamTests(unittest.TestCase):
+    def test_text_is_immediate_and_iteration_resumes(self):
+        result = stream(
+            chunk({"role": "assistant", "content": ""}),
+            chunk({"content": "Hello"}),
+            chunk({"content": "ignored"}, index=1),
+            chunk(),
+            chunk({"content": " world"}),
+            chunk({}, "stop"),
         )
-        expected = {
-            "schema_version": 1,
-            "id": "message-1",
-            "context_id": "context-1",
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "# 你好", "format": "markdown"},
-                {"type": "image", "url": "/assets/chart.png", "alt": "Sales chart"},
-                {"type": "file", "url": "/assets/report.pdf", "name": "report.pdf",
-                 "media_type": "application/pdf"},
-                {"type": "json", "data": {"count": 2, "rows": [True, None]}},
-            ],
-        }
-        self.assertEqual(result.to_dict(), expected)
-        self.assertEqual(json.loads(result.to_json()), expected)
+        self.assertIs(iter(result), result)
+        self.assertEqual(next(result), TextChunk("Hello"))
+        result.stream.close.assert_not_called()
+        self.assertEqual(list(result), [TextChunk(" world")])
+        self.assertEqual(list(result), [])
+        result.stream.close.assert_called_once()
 
-    def test_independent_messages(self) -> None:
-        first, second = AgentResult(), AgentResult()
-        self.assertNotEqual(first.id, second.id)
-        first.content.append(TextContent("hello"))
-        self.assertEqual(second.content, [])
+    def test_interleaved_tool_calls_are_assembled_in_index_order(self):
+        result = stream(
+            chunk({"content": "Checking", "tool_calls": [
+                {"index": 1, "id": "call-2", "type": "function",
+                 "function": {"name": "weather", "arguments": '{"city":'}},
+                {"index": 0, "id": "call-1", "type": "function",
+                 "function": {"name": "search", "arguments": '{"q":'}},
+            ]}),
+            chunk({"tool_calls": [
+                {"index": 0, "function": {"arguments": '"hello"}'}},
+                {"index": 1, "function": {"arguments": '"Paris"}'}},
+            ]}),
+            chunk({}, "tool_calls"),
+        )
+        self.assertEqual(list(result), [
+            TextChunk("Checking"),
+            RawToolUse("call-1", "search", '{"q":"hello"}'),
+            RawToolUse("call-2", "weather", '{"city":"Paris"}'),
+        ])
+        result.stream.close.assert_called_once()
 
-    def test_payload_is_detached(self) -> None:
-        result = AgentResult(content=[JsonContent({"rows": [1]})])
-        payload = result.to_dict()
-        payload["content"][0]["data"]["rows"].append(2)
-        self.assertEqual(result.content[0].data, {"rows": [1]})
+    def test_empty_stream(self):
+        result = stream(chunk())
+        self.assertEqual(list(result), [])
+        result.stream.close.assert_called_once()
 
-    def test_plain_text_is_not_parsed(self) -> None:
-        payload = AgentResult(content=[TextContent('{"count": 2}')]).to_dict()
-        self.assertEqual(payload["content"][0], {
-            "type": "text", "format": "plain", "text": '{"count": 2}',
-        })
+    def test_context_manager_closes_early(self):
+        result = stream(chunk({"content": "hello"}), chunk({"content": "world"}))
+        with result as entered:
+            self.assertIs(entered, result)
+            self.assertEqual(next(result), TextChunk("hello"))
+        result.close()
+        result.stream.close.assert_called_once()
+        self.assertEqual(list(result), [])
 
-    def test_non_json_values_fail_serialization(self) -> None:
-        with self.assertRaises(TypeError):
-            AgentResult(content=[JsonContent(object())]).to_dict()
-        with self.assertRaises(ValueError):
-            AgentResult(content=[JsonContent(float("nan"))]).to_json()
+    def test_upstream_error_is_propagated_and_closed(self):
+        error = RuntimeError("connection failed")
+        result = stream()
+        result.stream.__iter__.side_effect = error
+        with self.assertRaises(RuntimeError) as caught:
+            next(result)
+        self.assertIs(caught.exception, error)
+        result.stream.close.assert_called_once()
+
+    def test_incomplete_tool_calls_are_not_emitted(self):
+        for ending in ([], [chunk({}, "length")]):
+            with self.subTest(ending=ending):
+                result = stream(chunk({"tool_calls": [
+                    {"index": 0, "id": "call-1", "type": "function",
+                     "function": {"name": "search", "arguments": '{"q":'}},
+                ]}), *ending)
+                with self.assertRaises(ValueError):
+                    list(result)
+                result.stream.close.assert_called_once()
 
 
 if __name__ == "__main__":
