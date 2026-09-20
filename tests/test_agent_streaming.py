@@ -29,9 +29,9 @@ class AgentStreamingTests(unittest.TestCase):
         client_patch = patch("miniagent.OpenAI")
         self.client = client_patch.start().return_value
         self.addCleanup(client_patch.stop)
-        self.agent = Agent({"LLM": {
+        self.agent = Agent(None, {"LLM": {
             "API_KEY": "test", "BASE_URL": "https://example.com", "MODEL": "test",
-        }}, system_prompt="")
+        }}, "")
 
     def results(self, source):
         self.client.chat.completions.create.side_effect = [source, stream(chunk({}, "stop"))]

@@ -1,7 +1,7 @@
 import unittest
 from typing import Literal, Optional
 
-from miniagent import Tool
+from miniagent import RawToolUse, Tool
 
 
 class ToolInferenceTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class ToolInferenceTests(unittest.TestCase):
             "additionalProperties": False,
         })
         self.assertEqual(weather("Paris"), {"city": "Paris", "unit": "celsius"})
-        self.assertEqual(weather.execute({"city": "Paris"}),
+        self.assertEqual(weather.execute(RawToolUse("1", "weather", '{"city":"Paris"}')),
                          weather("Paris"))
 
     def test_nested_types_and_nullable_required_parameter(self):
@@ -72,7 +72,7 @@ class ToolInferenceTests(unittest.TestCase):
         tool = Tool.from_function(ping)
         self.assertEqual(tool.parameters["properties"], {})
         self.assertEqual(tool.parameters["required"], [])
-        self.assertEqual(tool.execute({}), "pong")
+        self.assertEqual(tool.execute(RawToolUse("1", "ping", "{}")), "pong")
 
     def test_invalid_signatures_fail_at_creation(self):
         def missing(value): pass

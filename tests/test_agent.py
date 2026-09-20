@@ -32,8 +32,8 @@ class AgentTests(unittest.TestCase):
         self.client = self.client_patch.start().return_value
         self.addCleanup(self.client_patch.stop)
         self.config = {"LLM": {"API_KEY": "test", "BASE_URL": "https://example.com", "MODEL": "test"}}
-        self.agent = Agent(self.config,
-                           Context(messages=[{"role": "user", "content": "Help"}]), "Be helpful")
+        self.agent = Agent(Context(messages=[{"role": "user", "content": "Help"}]),
+                           self.config, "Be helpful")
 
     def test_registration_is_atomic_and_agent_local(self):
         @Tool.from_function
@@ -51,7 +51,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.agent.tools, {"first": first})
         self.agent.add_tools(iter([second]))
         self.assertEqual(self.agent.tools, {"first": first, "second": second})
-        self.assertEqual(Agent(self.config, system_prompt="").tools, {})
+        self.assertEqual(Agent(None, self.config, "").tools, {})
 
     def test_text_only_and_system_prompt(self):
         source = completion("Hello")
@@ -69,7 +69,7 @@ class AgentTests(unittest.TestCase):
     def test_context_system_prompt_is_used_and_can_be_updated(self):
         context = Context(system_prompt="Context prompt")
         with patch("builtins.open") as open_file:
-            agent = Agent(self.config, context)
+            agent = Agent(context, self.config)
         open_file.assert_not_called()
         self.assertEqual(agent.system_prompt, "Context prompt")
         context.system_prompt = "Updated prompt"
@@ -80,11 +80,11 @@ class AgentTests(unittest.TestCase):
 
     def test_explicit_prompt_overrides_context_and_empty_prompt_skips_file(self):
         context = Context(system_prompt="Original")
-        agent = Agent(self.config, context, "Override")
+        agent = Agent(context, self.config, "Override")
         self.assertEqual(context.system_prompt, "Override")
         agent.system_prompt = ""
         with patch("builtins.open") as open_file:
-            Agent(self.config, context)
+            Agent(context, self.config)
         open_file.assert_not_called()
 
     def test_multiple_tools_and_successive_rounds(self):

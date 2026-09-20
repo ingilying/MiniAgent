@@ -179,10 +179,9 @@ class Agent:
     def _execute_tool(self, call: RawToolUse) -> tuple[ToolCall, str]:
         arguments: dict[str, Any] | str = call.arguments
         try:
-            parsed = json.loads(call.arguments)
-            if not isinstance(parsed, dict):
+            arguments = json.loads(call.arguments)
+            if not isinstance(arguments, dict):
                 raise ValueError("Tool arguments must be a JSON object")
-            arguments = parsed
             if call.name not in self.tools:
                 raise ValueError(f"Unknown tool: {call.name}")
             response = self.tools[call.name].execute(arguments)
@@ -202,7 +201,7 @@ class Agent:
                 messages=messages,
                 model=self.model,
                 stream=True,
-                **({"tools": openai_tools} if openai_tools else {}),
+                tools=openai_tools,
             )
             text: list[str] = []
             pending_tools: dict[int, RawToolUse] = {}
@@ -249,14 +248,13 @@ class Agent:
             self.ctx.messages.append(assistant)
             if not calls:
                 return
-            events: list[ToolCall] = []
             for call in calls:
                 event, content = self._execute_tool(call)
                 self.ctx.messages.append({
                     "role": "tool", "tool_call_id": call.id, "content": content,
                 })
-                events.append(event)
-            yield from events
+                yield event
+                
 
 
 def main() -> None:
@@ -265,3 +263,4 @@ def main() -> None:
         config = tomllib.load(file)
 
     agent = Agent(config)
+    
