@@ -1,10 +1,13 @@
+import { createInterface } from 'node:readline/promises'
+
 import { openai } from '@ai-sdk/openai'
 
 import { Agent, type AgentEvent } from './agent.js'
+import { Context } from './context.js'
 import { calculatorTool } from './tools/calculator.js'
 import { getCurrentTimeTool } from './tools/current-time.js'
 
-const DEFAULT_PROMPT = 'What is 17 * 23? Also, what time is it in Seoul right now?'
+const SUGGESTED_PROMPT = 'What is 17 * 23? Also, what time is it in Seoul right now?'
 
 function describeEvent(event: AgentEvent): string | undefined {
   switch (event.type) {
@@ -23,6 +26,35 @@ function describeEvent(event: AgentEvent): string | undefined {
   }
 }
 
+function createAgent(): Agent {
+  return new Agent({
+    model: openai(process.env.OPENAI_MODEL ?? 'gpt-6-astra'),
+    system:
+      'You are a precise, helpful assistant. ' +
+      'Use the available tools for facts you cannot know, such as math and the current time.',
+    tools: { calculator: calculatorTool, getCurrentTime: getCurrentTimeTool },
+    maxSteps: 8,
+  })
+}
+
+async function respond(agent: Agent, context: Context, prompt: string): Promise<void> {
+  context.addUser(prompt)
+  process.stdout.write('Agent: ')
+
+  for await (const event of agent.stream(context)) {
+    if (event.type === 'text-delta') {
+      process.stdout.write(event.text)
+      continue
+    }
+    const line = describeEvent(event)
+    if (line !== undefined) {
+      console.log(`\n${line}`)
+    }
+  }
+
+  process.stdout.write('\n\n')
+}
+
 async function main(): Promise<void> {
   try {
     process.loadEnvFile()
@@ -39,31 +71,40 @@ async function main(): Promise<void> {
     return
   }
 
-  const prompt = process.argv[2] ?? DEFAULT_PROMPT
+  const agent = createAgent()
+  const context = new Context()
 
-  const agent = new Agent({
-    model: openai(process.env.OPENAI_MODEL ?? 'gpt-6-astra'),
-    system:
-      'You are a precise, helpful assistant. ' +
-      'Use the available tools for facts you cannot know, such as math and the current time.',
-    tools: { calculator: calculatorTool, getCurrentTime: getCurrentTimeTool },
-    maxSteps: 8,
-  })
-
-  console.log(`You: ${prompt}\n`)
-
-  for await (const event of agent.stream(prompt)) {
-    if (event.type === 'text-delta') {
-      process.stdout.write(event.text)
-      continue
-    }
-    const line = describeEvent(event)
-    if (line !== undefined) {
-      console.log(line)
-    }
+  // Single-shot mode: pnpm dev "your prompt"
+  const prompt = process.argv[2]
+  if (prompt !== undefined) {
+    console.log(`You: ${prompt}`)
+    await respond(agent, context, prompt)
+    return
   }
 
-  console.log()
+  // Interactive mode: pnpm dev
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  console.log('MiniAgent REPL — ask anything. Type "exit" or press Ctrl-D to quit.')
+  console.log(`Try: "${SUGGESTED_PROMPT}"\n`)
+
+  try {
+    process.stdout.write('You: ')
+    for await (const line of rl) {
+      const input = line.trim()
+
+      if (input === 'exit' || input === 'quit') {
+        break
+      }
+
+      if (input.length > 0) {
+        await respond(agent, context, input)
+      }
+
+      process.stdout.write('You: ')
+    }
+  } finally {
+    rl.close()
+  }
 }
 
 main().catch((error: unknown) => {

@@ -12,10 +12,16 @@ import {
   type TypedToolResult,
 } from 'ai'
 
+import { Context } from './context.js'
+
 /**
- * Input for an agent run: either a single user prompt or a full message history.
+ * Input for an agent run:
+ * - a single user prompt,
+ * - a full message history, or
+ * - a `Context`, whose history is sent to the model and extended with the
+ *   messages the agent generates during the run.
  */
-export type AgentInput = string | ModelMessage[]
+export type AgentInput = string | ModelMessage[] | Context
 
 export interface AgentOptions {
   /**
@@ -129,6 +135,9 @@ export class Agent {
    * text and reasoning deltas, tool calls and results, step boundaries,
    * and the final finish event.
    *
+   * If a `Context` is passed as the input, the messages generated during the
+   * run are appended to it once the stream has finished.
+   *
    * Errors are not thrown; they are yielded as `{ type: 'error' }` events
    * (matching `streamText` behavior of keeping the stream alive).
    */
@@ -196,11 +205,22 @@ export class Agent {
           break
       }
     }
+
+    if (input instanceof Context) {
+      try {
+        input.append(await result.responseMessages)
+      } catch {
+        // The run failed; its error was already yielded as an 'error' event.
+      }
+    }
   }
 
   /**
    * Run the agent to completion without streaming and return the final
    * result, including all steps, tool calls, and usage.
+   *
+   * If a `Context` is passed as the input, the messages generated during the
+   * run are appended to it.
    */
   async run(input: AgentInput, options: AgentCallOptions = {}): Promise<AgentRunResult> {
     const result = await generateText({
@@ -213,6 +233,10 @@ export class Agent {
       messages: toMessages(input),
       abortSignal: options.abortSignal,
     })
+
+    if (input instanceof Context) {
+      input.append(result.responseMessages)
+    }
 
     return {
       text: result.text,
@@ -227,5 +251,11 @@ export class Agent {
 }
 
 function toMessages(input: AgentInput): ModelMessage[] {
-  return typeof input === 'string' ? [{ role: 'user', content: input }] : input
+  if (typeof input === 'string') {
+    return [{ role: 'user', content: input }]
+  }
+  if (input instanceof Context) {
+    return [...input.messages]
+  }
+  return input
 }

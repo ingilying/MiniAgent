@@ -27,15 +27,16 @@ OPENAI_MODEL=gpt-6-astra
 ## Usage
 
 ```sh
-# default demo prompt (calculator + current time tools)
+# interactive REPL (conversation history is kept across turns)
 pnpm dev
 
-# custom prompt
+# single-shot mode
 pnpm dev "What is 17 * 23? Also, what time is it in Seoul right now?"
 ```
 
-The demo streams the agent's answer to the terminal and logs tool calls, tool
-results, and step boundaries as they happen.
+Both modes stream the agent's answer to the terminal and log tool calls, tool
+results, and step boundaries as they happen. The REPL keeps a `Context` with
+the full conversation history, so follow-up questions work.
 
 ## The Agent class
 
@@ -83,6 +84,37 @@ history to continue a conversation across runs).
 Both methods accept either a plain prompt string or a `ModelMessage[]`
 history, and an optional `AbortSignal`.
 
+### Context (conversation history)
+
+`src/context.ts` exports a `Context` class that stores the conversation
+history. Pass it as the agent input: the current history is sent to the model
+and the messages generated during the run — including tool calls and tool
+results — are appended back into the context afterwards.
+
+```ts
+import { Context } from './context.js'
+
+const context = new Context()
+context.addUser('What is 6 * 7?')
+
+for await (const event of agent.stream(context)) {
+  if (event.type === 'text-delta') process.stdout.write(event.text)
+}
+
+// context.messages: user, assistant (tool call), tool result, assistant (answer)
+
+// next turn sees the full history:
+context.addUser('and in hex?')
+for await (const event of agent.stream(context)) {
+  /* ... */
+}
+```
+
+The `Context` API: `add(message)`, `addUser(text)`, `addAssistant(text)`,
+`append(messages)`, `clear()`, `clone()`, plus `messages` (defensive snapshot)
+and `messageCount`. Failed runs do not corrupt the history — nothing is
+appended when the run errors.
+
 ### Tools
 
 Tools live in `src/tools/` and are plain AI SDK `tool()` definitions with zod
@@ -125,7 +157,8 @@ pnpm test
 ```
 ├── src/
 │   ├── agent.ts           # Agent class (stream + run + tool loop)
-│   ├── index.ts           # demo entry point (OpenAI provider)
+│   ├── context.ts         # Context class (conversation history)
+│   ├── index.ts           # demo entry point (OpenAI provider, REPL)
 │   └── tools/             # tool definitions
 │       ├── calculator.ts
 │       └── current-time.ts
