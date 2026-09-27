@@ -207,10 +207,15 @@ export class Agent {
     }
 
     if (input instanceof Context) {
+      let messages: ModelMessage[] | undefined
       try {
-        input.append(await result.responseMessages)
+        messages = await result.responseMessages
       } catch {
         // The run failed; its error was already yielded as an 'error' event.
+      }
+      if (messages !== undefined) {
+        input.append(messages)
+        await saveIfBound(input)
       }
     }
   }
@@ -236,6 +241,7 @@ export class Agent {
 
     if (input instanceof Context) {
       input.append(result.responseMessages)
+      await saveIfBound(input)
     }
 
     return {
@@ -247,6 +253,15 @@ export class Agent {
       toolResults: result.toolResults,
       responseMessages: result.responseMessages,
     }
+  }
+}
+
+/**
+ * Persists the context after a run when it is bound to a store.
+ */
+async function saveIfBound(context: Context): Promise<void> {
+  if (context.autoSave && context.store !== undefined && context.id !== undefined) {
+    await context.save()
   }
 }
 

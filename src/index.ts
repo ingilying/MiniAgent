@@ -4,10 +4,15 @@ import { openai } from '@ai-sdk/openai'
 
 import { Agent, type AgentEvent } from './agent.js'
 import { Context } from './context.js'
+import { FileContextStore } from './store.js'
 import { calculatorTool } from './tools/calculator.js'
 import { getCurrentTimeTool } from './tools/current-time.js'
 
 const SUGGESTED_PROMPT = 'What is 17 * 23? Also, what time is it in Seoul right now?'
+
+const STORE_DIRECTORY = '.miniagent/contexts'
+const DEFAULT_SESSION = 'default'
+const DEFAULT_CONTEXT_WINDOW = 128_000
 
 function describeEvent(event: AgentEvent): string | undefined {
   switch (event.type) {
@@ -24,6 +29,20 @@ function describeEvent(event: AgentEvent): string | undefined {
     default:
       return undefined
   }
+}
+
+function contextWindowFromEnv(): number {
+  const value = Number(process.env.MINIAGENT_CONTEXT_WINDOW ?? DEFAULT_CONTEXT_WINDOW)
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_CONTEXT_WINDOW
+}
+
+function describeTokens(context: Context): string {
+  const used = context.tokenCount.toLocaleString('en-US')
+  if (context.contextWindow === undefined) {
+    return `[tokens] ${used}`
+  }
+  const ratio = ((context.usageRatio ?? 0) * 100).toFixed(1)
+  return `[tokens] ${used} / ${context.contextWindow.toLocaleString('en-US')} (${ratio}%)`
 }
 
 function createAgent(): Agent {
@@ -52,7 +71,7 @@ async function respond(agent: Agent, context: Context, prompt: string): Promise<
     }
   }
 
-  process.stdout.write('\n\n')
+  console.log(`\n${describeTokens(context)}\n`)
 }
 
 async function main(): Promise<void> {
@@ -72,20 +91,33 @@ async function main(): Promise<void> {
   }
 
   const agent = createAgent()
-  const context = new Context()
+  const contextWindow = contextWindowFromEnv()
 
-  // Single-shot mode: pnpm dev "your prompt"
+  // Single-shot mode: pnpm dev "your prompt" (ephemeral context)
   const prompt = process.argv[2]
   if (prompt !== undefined) {
+    const context = new Context([], { contextWindow })
     console.log(`You: ${prompt}`)
     await respond(agent, context, prompt)
     return
   }
 
-  // Interactive mode: pnpm dev
+  // Interactive mode: pnpm dev (persisted per session, restored on start)
+  const store = new FileContextStore(STORE_DIRECTORY)
+  const session = process.env.MINIAGENT_SESSION ?? DEFAULT_SESSION
+  const context = await Context.load(store, session, { contextWindow })
+
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   console.log('MiniAgent REPL — ask anything. Type "exit" or press Ctrl-D to quit.')
-  console.log(`Try: "${SUGGESTED_PROMPT}"\n`)
+  console.log(`Try: "${SUGGESTED_PROMPT}"`)
+  if (context.messageCount > 0) {
+    console.log(
+      `Restored session "${session}": ${context.messageCount} messages, ${describeTokens(context)}.`,
+    )
+  } else {
+    console.log(`New session "${session}" — history is saved to ${STORE_DIRECTORY}.`)
+  }
+  console.log()
 
   try {
     process.stdout.write('You: ')
