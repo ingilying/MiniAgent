@@ -1,6 +1,8 @@
 # MiniAgent
 
-A minimal Node.js + TypeScript 7 project using pnpm, ESM, ESLint, Prettier, and Vitest.
+A minimal agent built with Node.js, TypeScript 7, and the [AI SDK](https://ai-sdk.dev) —
+using plain SDK primitives (`streamText` / `generateText` + tools + a step loop)
+rather than the SDK's own `ToolLoopAgent` abstraction.
 
 ## Requirements
 
@@ -13,11 +15,101 @@ A minimal Node.js + TypeScript 7 project using pnpm, ESM, ESLint, Prettier, and 
 pnpm install
 ```
 
+Then set your OpenAI credentials — either in the environment or in a `.env` file
+(loaded automatically, see [src/index.ts](src/index.ts)):
+
+```sh
+OPENAI_API_KEY=sk-...
+# optional, defaults to gpt-6-astra
+OPENAI_MODEL=gpt-6-astra
+```
+
+## Usage
+
+```sh
+# default demo prompt (calculator + current time tools)
+pnpm dev
+
+# custom prompt
+pnpm dev "What is 17 * 23? Also, what time is it in Seoul right now?"
+```
+
+The demo streams the agent's answer to the terminal and logs tool calls, tool
+results, and step boundaries as they happen.
+
+## The Agent class
+
+`src/agent.ts` exports a small `Agent` class that wraps the AI SDK Core tool loop:
+
+```ts
+import { openai } from '@ai-sdk/openai'
+import { Agent } from './agent.js'
+
+const agent = new Agent({
+  model: openai('gpt-6-astra'), // any AI SDK LanguageModel
+  system: 'You are a helpful assistant.',
+  tools: { calculator: calculatorTool }, // any AI SDK ToolSet
+  maxSteps: 8, // tool-loop step limit
+})
+
+// Streaming: async generator of typed events
+for await (const event of agent.stream('What is 6 * 7?')) {
+  if (event.type === 'text-delta') process.stdout.write(event.text)
+  if (event.type === 'tool-result') console.log(event.output)
+}
+
+// Non-streaming: full result incl. steps, tool calls, usage, responseMessages
+const result = await agent.run('What is 6 * 7?')
+```
+
+`stream()` event types:
+
+| Event             | Emitted when                                   |
+| ----------------- | ---------------------------------------------- |
+| `start`           | the run starts                                 |
+| `step-start`      | a step (model call) begins                     |
+| `text-delta`      | a chunk of answer text arrives                 |
+| `reasoning-delta` | a chunk of model reasoning arrives             |
+| `tool-call`       | the model requests a tool call                 |
+| `tool-result`     | a tool finished and returned its output        |
+| `step-finish`     | a step finished (with finish reason and usage) |
+| `finish`          | the whole run finished (with total usage)      |
+| `error`           | something failed; the run stays alive          |
+
+`run()` returns `text`, `finishReason`, `usage`, `steps`, `toolCalls`,
+`toolResults`, and `responseMessages` (append the latter to your message
+history to continue a conversation across runs).
+
+Both methods accept either a plain prompt string or a `ModelMessage[]`
+history, and an optional `AbortSignal`.
+
+### Tools
+
+Tools live in `src/tools/` and are plain AI SDK `tool()` definitions with zod
+`inputSchema`s:
+
+- `calculator` — safely evaluates arithmetic expressions (no `eval`), via a
+  small recursive-descent parser
+- `getCurrentTime` — current date/time for an optional IANA time zone
+
+Add a tool by creating a `tool({ description, inputSchema, execute })` and
+adding it to the agent's `tools` object. Tool errors (thrown in `execute`)
+are surfaced to the model as `tool-error` parts so it can react to them.
+
+### Tests
+
+Tests run against `MockLanguageModelV4` from `ai/test`, so no API key or
+network access is needed:
+
+```sh
+pnpm test
+```
+
 ## Scripts
 
 | Command             | Description                          |
 | ------------------- | ------------------------------------ |
-| `pnpm dev`          | Run `src/index.ts` with tsx (watch)  |
+| `pnpm dev`          | Run the demo agent with tsx (watch)  |
 | `pnpm build`        | Compile to `dist/` (type check + JS) |
 | `pnpm start`        | Run the built output                 |
 | `pnpm test`         | Run tests once (Vitest)              |
@@ -27,6 +119,23 @@ pnpm install
 | `pnpm format`       | Format with Prettier                 |
 | `pnpm format:check` | Check formatting without writing     |
 | `pnpm check`        | typecheck + lint + test in one go    |
+
+## Project layout
+
+```
+├── src/
+│   ├── agent.ts           # Agent class (stream + run + tool loop)
+│   ├── index.ts           # demo entry point (OpenAI provider)
+│   └── tools/             # tool definitions
+│       ├── calculator.ts
+│       └── current-time.ts
+├── tests/                 # Vitest tests (mock language model, no network)
+├── tsconfig.json          # editor + type checking config
+└── tsconfig.build.json    # build (emit) config
+```
+
+Imports use ESM with explicit `.js` extensions (`import { Agent } from './agent.js'`),
+which is required by `moduleResolution: NodeNext`.
 
 ## TypeScript 7 (native compiler)
 
@@ -47,16 +156,3 @@ Notes:
 - `tsc6` is available if a tool ever needs the TS 6 CLI directly.
 - Once typescript-eslint supports the TS 7.1+ API, you can drop the `typescript`
   alias and use `typescript@^7` as a regular dependency.
-
-## Project layout
-
-```
-├── src/            # application source
-│   ├── index.ts    # entry point
-│   └── greet.ts    # example module
-├── tests/          # Vitest test files
-├── tsconfig.json   # editor + type checking config
-└── tsconfig.build.json  # build (emit) config
-```
-
-Imports use ESM with explicit `.js` extensions (`import { greet } from './greet.js'`), which is required by `moduleResolution: NodeNext`.
