@@ -38,11 +38,23 @@ function contextWindowFromEnv(): number {
 
 function describeTokens(context: Context): string {
   const used = context.tokenCount.toLocaleString('en-US')
+  const usage = context.usage
+
+  const lines: string[] = []
   if (context.contextWindow === undefined) {
-    return `[tokens] ${used}`
+    lines.push(used)
+  } else {
+    const ratio = ((context.tokenCount / context.contextWindow) * 100).toFixed(1)
+    lines.push(`${used} / ${context.contextWindow.toLocaleString('en-US')} (${ratio}%)`)
   }
-  const ratio = ((context.usageRatio ?? 0) * 100).toFixed(1)
-  return `[tokens] ${used} / ${context.contextWindow.toLocaleString('en-US')} (${ratio}%)`
+
+  if (usage !== undefined && (usage.cacheReadTokens > 0 || usage.cacheWriteTokens > 0)) {
+    const read = usage.cacheReadTokens.toLocaleString('en-US')
+    const write = usage.cacheWriteTokens.toLocaleString('en-US')
+    lines.push(`cache ${read} read, ${write} write`)
+  }
+
+  return `[tokens] ${lines.join(' · ')}`
 }
 
 function createAgent(): Agent {

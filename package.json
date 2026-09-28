@@ -36,7 +36,6 @@
   "dependencies": {
     "@ai-sdk/openai": "^4.0.78",
     "ai": "^7.0.116",
-    "gpt-tokenizer": "^4.0.0",
     "zod": "^4.6.5"
   }
 }

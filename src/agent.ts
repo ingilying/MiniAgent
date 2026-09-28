@@ -208,13 +208,18 @@ export class Agent {
 
     if (input instanceof Context) {
       let messages: ModelMessage[] | undefined
+      let usage: LanguageModelUsage | undefined
       try {
         messages = await result.responseMessages
+        usage = (await result.steps).at(-1)?.usage
       } catch {
         // The run failed; its error was already yielded as an 'error' event.
       }
       if (messages !== undefined) {
         input.append(messages)
+        if (usage !== undefined) {
+          input.recordUsage(usage)
+        }
         await saveIfBound(input)
       }
     }
@@ -241,6 +246,10 @@ export class Agent {
 
     if (input instanceof Context) {
       input.append(result.responseMessages)
+      const lastStep = result.steps.at(-1)
+      if (lastStep !== undefined) {
+        input.recordUsage(lastStep.usage)
+      }
       await saveIfBound(input)
     }
 
@@ -260,7 +269,7 @@ export class Agent {
  * Persists the context after a run when it is bound to a store.
  */
 async function saveIfBound(context: Context): Promise<void> {
-  if (context.autoSave && context.store !== undefined && context.id !== undefined) {
+  if (context.autoSave && context.store !== undefined) {
     await context.save()
   }
 }

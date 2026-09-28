@@ -39,14 +39,15 @@ pnpm dev "What is 17 * 23? Also, what time is it in Seoul right now?"
 ```
 
 Both modes stream the agent's answer to the terminal, log tool calls, tool
-results, and step boundaries, and print how many tokens the conversation
-occupies. The REPL keeps a `Context` with the full conversation history and
-saves it to `.miniagent/contexts/<session>.json` after every turn, so a restart
-resumes the conversation:
+results, and step boundaries, and print the token usage of the conversation:
 
 ```
 Restored session "default": 6 messages, [tokens] 214 / 128,000 (0.2%).
 ```
+
+The REPL keeps a `Context` with the full conversation history and saves it to
+`.miniagent/contexts/<session>.json` after every turn, so a restart resumes the
+conversation.
 
 ## The Agent class
 
@@ -139,6 +140,10 @@ const store = new FileContextStore('.miniagent/contexts')
 // empty if nothing stored for this id yet
 const context = await Context.load(store, 'user-123')
 
+// or let the context generate its own id
+const fresh = new Context([], { store })
+console.log(fresh.id) // generated UUID
+
 context.addUser('What is 6 * 7?')
 for await (const event of agent.stream(context)) {
   /* ... */
@@ -150,37 +155,49 @@ const resumed = await Context.load(store, 'user-123')
 console.log(resumed.messageCount) // history is back
 ```
 
-- `FileContextStore` writes one JSON file per context id, atomically
-  (temp file + rename) and sanitizes ids so they cannot escape the directory.
+- `FileContextStore` writes one JSON file per context id (holding the messages
+  and the last reported usage), atomically (temp file + rename), and sanitizes
+  ids so they cannot escape the directory.
 - Auto-save is on by default when a store is bound; disable it per context
   with `new Context([], { store, id, autoSave: false })` and call
   `await context.save()` yourself.
 - `save()` throws if the context is not bound to a store; `delete(id)` removes
-  a stored history.
+  a stored history. Omit `id` and the context generates one.
 - Any backend works — implement the `ContextStore` interface
   (`load` / `save` / `delete`) for a database, Redis, object storage, ...
 
 ### Token counting
 
-Contexts estimate how much of the model's context window the conversation
-occupies. Pass the window size and read the usage:
+Token counts come from the provider — there is no local tokenizer. After every
+run the agent records the usage the model reported for its last step, and the
+context reports it:
 
 ```ts
 const context = new Context([], { contextWindow: 128_000 })
 
-context.tokenCount // estimated tokens in the history
+context.tokenCount // input + output tokens of the last response
+context.usage // { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
 context.remainingTokens // contextWindow - tokenCount
-context.usageRatio // 0..1, fraction of the window used
 ```
 
-Counting uses [`gpt-tokenizer`](https://github.com/niieani/gpt-tokenizer)'s
-`o200k_base` encoding (the encoding used by current OpenAI models), tokenizing
-all text, tool calls, and tool results, plus the chat-format per-message
-overhead. It is an estimate — images/files are not counted and other providers
-tokenize differently. Supply your own counter via
-`new Context([], { tokenCounter: (messages) => ... })`; the `TokenCounter` type
-and the standalone `countTextTokens` / `countMessageTokens` /
-`countMessagesTokens` helpers live in [src/tokens.ts](src/tokens.ts).
+Things worth knowing:
+
+- `tokenCount` is `0` until the first response has been recorded.
+- It counts what was sent, so a message you just added is not part of the
+  number until the next run.
+- `inputTokens` already includes tokens served from the provider's prompt
+  cache, so `cacheReadTokens` / `cacheWriteTokens` are reported alongside it
+  and not added to `tokenCount` again.
+- Providers that do not report usage leave the count at `0`.
+- The AI SDK does not ship model context-window sizes, so the window is
+  configured by the caller (the demo reads `MINIAGENT_CONTEXT_WINDOW`);
+  `remainingTokens` is only available when one is set.
+
+The count is stored together with the history, so a restored session knows its
+size before the next run.
+
+The AI SDK does not ship model context-window sizes, so the window is
+configured by the caller (the demo reads `MINIAGENT_CONTEXT_WINDOW`).
 
 ### Tools
 
@@ -226,7 +243,6 @@ pnpm test
 │   ├── agent.ts           # Agent class (stream + run + tool loop)
 │   ├── context.ts         # Context class (history, persistence, tokens)
 │   ├── store.ts           # ContextStore interface + FileContextStore
-│   ├── tokens.ts          # token counting (o200k_base)
 │   ├── index.ts           # demo entry point (OpenAI provider, REPL)
 │   └── tools/             # tool definitions
 │       ├── calculator.ts

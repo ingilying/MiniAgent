@@ -204,6 +204,71 @@ describe('Agent with Context', () => {
     expect(model.doStreamCalls[2]?.prompt.length).toBe(5)
   })
 
+  it('records the token usage reported by the model', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Hello!' },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
+      }),
+    })
+
+    const context = new Context().addUser('hi')
+
+    await collectEvents(new Agent({ model }), context)
+
+    expect(context.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    })
+    expect(context.tokenCount).toBe(15)
+  })
+
+  it('keeps the cache numbers the model reports', async () => {
+    const cachedUsage = {
+      inputTokens: { total: 130, noCache: 30, cacheRead: 100, cacheWrite: 4 },
+      outputTokens: { total: 5, text: 5, reasoning: undefined },
+    }
+
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Hello!' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              usage: cachedUsage,
+              finishReason: { unified: 'stop', raw: undefined },
+            },
+          ],
+        }),
+      }),
+    })
+
+    const context = new Context().addUser('hi')
+
+    await collectEvents(new Agent({ model }), context)
+
+    expect(context.usage).toEqual({
+      inputTokens: 130,
+      outputTokens: 5,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 4,
+    })
+    expect(context.tokenCount).toBe(135)
+  })
+
   it('run() also saves the history', async () => {
     const model = new MockLanguageModelV4({
       doGenerate: {

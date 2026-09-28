@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -52,13 +52,24 @@ describe('FileContextStore', () => {
     await rm(directory, { recursive: true, force: true })
   })
 
-  it('round-trips messages', async () => {
+  it('round-trips a snapshot', async () => {
+    const store = new FileContextStore(directory)
+    const snapshot = {
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      usage: { inputTokens: 12, outputTokens: 3, cacheReadTokens: 8, cacheWriteTokens: 2 },
+    }
+
+    await store.save('session-1', snapshot)
+
+    expect(await store.load('session-1')).toEqual(snapshot)
+  })
+
+  it('reads legacy files that hold a bare message array', async () => {
     const store = new FileContextStore(directory)
     const messages = [{ role: 'user' as const, content: 'hello' }]
+    await writeFile(join(directory, 'legacy.json'), JSON.stringify(messages), 'utf8')
 
-    await store.save('session-1', messages)
-
-    expect(await store.load('session-1')).toEqual(messages)
+    expect(await store.load('legacy')).toEqual({ messages })
   })
 
   it('returns undefined for unknown ids', async () => {
@@ -67,9 +78,9 @@ describe('FileContextStore', () => {
     expect(await store.load('missing')).toBeUndefined()
   })
 
-  it('deletes stored messages', async () => {
+  it('deletes stored snapshots', async () => {
     const store = new FileContextStore(directory)
-    await store.save('session-1', [{ role: 'user', content: 'hi' }])
+    await store.save('session-1', { messages: [{ role: 'user', content: 'hi' }] })
 
     await store.delete('session-1')
 
@@ -80,12 +91,12 @@ describe('FileContextStore', () => {
     const store = new FileContextStore(directory)
     const id = '../escape/attempt'
 
-    await store.save(id, [{ role: 'user', content: 'hi' }])
+    await store.save(id, { messages: [{ role: 'user', content: 'hi' }] })
 
     const files = await readdir(directory)
     expect(files).toHaveLength(1)
     expect(files[0]).toMatch(/\.json$/)
-    expect(await store.load(id)).toHaveLength(1)
+    expect((await store.load(id))?.messages).toHaveLength(1)
   })
 })
 
@@ -106,10 +117,22 @@ describe('Context persistence', () => {
     await expect(context.save()).rejects.toThrow(/not bound/)
   })
 
+  it('saves and reloads under a generated id', async () => {
+    const store = new FileContextStore(directory)
+    const context = new Context([], { store }).addUser('hello')
+
+    await context.save()
+
+    const restored = await Context.load(store, context.id)
+    expect(restored.messages).toEqual(context.messages)
+  })
+
   it('loads a stored history into a bound context', async () => {
     const store = new FileContextStore(directory)
-    const original = new Context().addUser('hello').addAssistant('hi!')
-    await store.save('session-1', original.messages)
+    const original = new Context([], { store, id: 'session-1' })
+      .addUser('hello')
+      .addAssistant('hi!')
+    await original.save()
 
     const restored = await Context.load(store, 'session-1')
 
@@ -123,7 +146,51 @@ describe('Context persistence', () => {
     expect(reloaded.messageCount).toBe(3)
   })
 
-  it('auto-saves the history after an agent run', async () => {
+  it('persists the usage reported by the provider', async () => {
+    const store = new FileContextStore(directory)
+    const context = new Context([], { store, id: 'session-1' }).addUser('hello')
+    context.recordUsage({
+      inputTokens: 123,
+      outputTokens: 45,
+      inputTokenDetails: {
+        noCacheTokens: 23,
+        cacheReadTokens: 100,
+        cacheWriteTokens: 0,
+      },
+    })
+
+    await context.save()
+
+    const restored = await Context.load(store, 'session-1')
+    expect(restored.usage).toEqual({
+      inputTokens: 123,
+      outputTokens: 45,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 0,
+    })
+    expect(restored.tokenCount).toBe(168)
+  })
+
+  it('loads older usage without cache numbers', async () => {
+    const store = new FileContextStore(directory)
+    const snapshot = {
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      usage: { inputTokens: 40, outputTokens: 4 },
+    }
+    await writeFile(join(directory, 'old.json'), JSON.stringify(snapshot), 'utf8')
+
+    const restored = await Context.load(store, 'old')
+
+    expect(restored.usage).toEqual({
+      inputTokens: 40,
+      outputTokens: 4,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    })
+    expect(restored.tokenCount).toBe(44)
+  })
+
+  it('auto-saves the history and usage after an agent run', async () => {
     const store = new FileContextStore(directory)
     const model = new MockLanguageModelV4({
       doStream: textStream('Hello there!'),
@@ -136,10 +203,16 @@ describe('Context persistence', () => {
     expect(events.at(-1)?.type).toBe('finish')
     expect(context.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
 
-    // the history was persisted automatically — a restart sees it
+    // the history and the reported usage were persisted automatically
     const restored = await Context.load(store, 'session-1')
     expect(restored.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
-    expect(restored.tokenCount).toBe(context.tokenCount)
+    expect(restored.usage).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    })
+    expect(restored.tokenCount).toBe(15)
   })
 
   it('does not auto-save when autoSave is disabled', async () => {
