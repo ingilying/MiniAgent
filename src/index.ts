@@ -4,6 +4,7 @@ import { openai } from '@ai-sdk/openai'
 
 import { Agent, type AgentEvent } from './agent.js'
 import { Context } from './context.js'
+import { fetchModelLimits } from './model-info.js'
 import { FileContextStore } from './store.js'
 import { calculatorTool } from './tools/calculator.js'
 import { getCurrentTimeTool } from './tools/current-time.js'
@@ -11,8 +12,9 @@ import { getCurrentTimeTool } from './tools/current-time.js'
 const SUGGESTED_PROMPT = 'What is 17 * 23? Also, what time is it in Seoul right now?'
 
 const STORE_DIRECTORY = '.miniagent/contexts'
+const MODEL_CACHE_FILE = '.miniagent/models.json'
 const DEFAULT_SESSION = 'default'
-const DEFAULT_CONTEXT_WINDOW = 128_000
+const DEFAULT_MODEL = 'gpt-6-astra'
 
 function describeEvent(event: AgentEvent): string | undefined {
   switch (event.type) {
@@ -31,9 +33,35 @@ function describeEvent(event: AgentEvent): string | undefined {
   }
 }
 
-function contextWindowFromEnv(): number {
-  const value = Number(process.env.MINIAGENT_CONTEXT_WINDOW ?? DEFAULT_CONTEXT_WINDOW)
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_CONTEXT_WINDOW
+/**
+ * Context window for the model: an explicit override wins, otherwise the
+ * limit is read from the models.dev catalog. `undefined` when neither is
+ * available.
+ */
+async function resolveContextWindow(modelId: string): Promise<number | undefined> {
+  const override = process.env.MINIAGENT_CONTEXT_WINDOW
+  if (override !== undefined) {
+    const value = Number(override)
+    if (Number.isFinite(value) && value > 0) {
+      return value
+    }
+    console.log(`[model] ignoring invalid MINIAGENT_CONTEXT_WINDOW="${override}"`)
+  }
+
+  try {
+    const limits = await fetchModelLimits(modelId, { cacheFile: MODEL_CACHE_FILE })
+    if (limits?.contextWindow === undefined) {
+      console.log(`[model] no context window in catalog for "${modelId}"`)
+      return undefined
+    }
+    console.log(
+      `[model] ${limits.id}: ${limits.contextWindow.toLocaleString('en-US')} token context window`,
+    )
+    return limits.contextWindow
+  } catch (error) {
+    console.log(`[model] could not read model limits: ${String(error)}`)
+    return undefined
+  }
 }
 
 function describeTokens(context: Context): string {
@@ -57,9 +85,9 @@ function describeTokens(context: Context): string {
   return `[tokens] ${lines.join(' · ')}`
 }
 
-function createAgent(): Agent {
+function createAgent(modelId: string): Agent {
   return new Agent({
-    model: openai(process.env.OPENAI_MODEL ?? 'gpt-6-astra'),
+    model: openai(modelId),
     system:
       'You are a precise, helpful assistant. ' +
       'Use the available tools for facts you cannot know, such as math and the current time.',
@@ -102,8 +130,9 @@ async function main(): Promise<void> {
     return
   }
 
-  const agent = createAgent()
-  const contextWindow = contextWindowFromEnv()
+  const modelId = process.env.OPENAI_MODEL ?? DEFAULT_MODEL
+  const agent = createAgent(modelId)
+  const contextWindow = await resolveContextWindow(modelId)
 
   // Single-shot mode: pnpm dev "your prompt" (ephemeral context)
   const prompt = process.argv[2]

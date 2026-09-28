@@ -24,7 +24,7 @@ OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-6-astra
 # optional, name of the persisted REPL session, defaults to "default"
 MINIAGENT_SESSION=default
-# optional, context window used for the token percentage, defaults to 128000
+# optional, overrides the context window read from the model catalog
 MINIAGENT_CONTEXT_WINDOW=128000
 ```
 
@@ -189,9 +189,11 @@ Things worth knowing:
   cache, so `cacheReadTokens` / `cacheWriteTokens` are reported alongside it
   and not added to `tokenCount` again.
 - Providers that do not report usage leave the count at `0`.
-- The AI SDK does not ship model context-window sizes, so the window is
-  configured by the caller (the demo reads `MINIAGENT_CONTEXT_WINDOW`);
-  `remainingTokens` is only available when one is set.
+- The AI SDK does not ship model context-window sizes. The demo reads them from
+  the [models.dev](https://models.dev) catalog ([src/model-info.ts](src/model-info.ts)),
+  cached in `.miniagent/models.json` for an hour, and falls back to
+  `MINIAGENT_CONTEXT_WINDOW` as an override. `remainingTokens` is only available
+  when a window is known.
 
 The count is stored together with the history, so a restored session knows its
 size before the next run.
@@ -242,6 +244,7 @@ pnpm test
 ├── src/
 │   ├── agent.ts           # Agent class (stream + run + tool loop)
 │   ├── context.ts         # Context class (history, persistence, tokens)
+│   ├── model-info.ts      # model limits from the models.dev catalog
 │   ├── store.ts           # ContextStore interface + FileContextStore
 │   ├── index.ts           # demo entry point (OpenAI provider, REPL)
 │   └── tools/             # tool definitions
