@@ -274,9 +274,7 @@ export class App {
   private apiKeyHint(providerId: string): string {
     const sources: string[] = []
     if (this.configFile !== false) {
-      sources.push(
-        `providers.${providerId}.apiKey or apiKeys.${providerId} in ${this.configFile}`,
-      )
+      sources.push(`providers.${providerId}.apiKey or apiKeys.${providerId} in ${this.configFile}`)
     }
     const envVar = providerEnvVar(providerId)
     if (envVar !== undefined) {

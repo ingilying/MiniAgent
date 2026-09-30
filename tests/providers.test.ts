@@ -1,12 +1,7 @@
 import { NoSuchProviderError } from 'ai'
 import { describe, expect, it } from 'vitest'
 
-import {
-  createModel,
-  loadSettings,
-  providerEnvVar,
-  providerList,
-} from '../src/providers.js'
+import { createModel, loadSettings, providerEnvVar, providerList } from '../src/providers.js'
 
 describe('provider registry', () => {
   it('lists the built-in providers', () => {
