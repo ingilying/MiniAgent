@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 
 import type { LanguageModelUsage, ModelMessage } from 'ai'
 
+import { fetchModelLimits } from './model-info.js'
 import type { ContextSnapshot, ContextStore, ContextUsage } from './store.js'
 
 export interface ContextOptions {
@@ -26,6 +28,34 @@ export interface ContextOptions {
    * @default true
    */
   autoSave?: boolean
+  /**
+   * Provider id this conversation runs on, e.g. `openai`.
+   *
+   * @default 'openai'
+   */
+  providerId?: string
+  /**
+   * Model whose context window `initRemote()` looks up in the catalog.
+   */
+  modelId?: string
+  /**
+   * Environment read by `initRemote()` for `MINIAGENT_CONTEXT_WINDOW`.
+   * Defaults to `process.env`.
+   */
+  env?: NodeJS.ProcessEnv
+  /**
+   * Catalog endpoint used by `initRemote()`. Defaults to models.dev.
+   */
+  catalogUrl?: string
+  /**
+   * Directory holding the model cache used by `initRemote()`. Without it the
+   * catalog is fetched but not cached.
+   */
+  dataDirectory?: string
+  /**
+   * Receives the `[model] ...` diagnostics emitted by `initRemote()`.
+   */
+  onModelLine?: (line: string) => void
 }
 
 /**
@@ -67,6 +97,10 @@ export interface ContextOptions {
 export class Context {
   private readonly history: ModelMessage[]
   private lastUsage: ContextUsage | undefined
+  private readonly env: NodeJS.ProcessEnv | undefined
+  private readonly catalogUrl: string | undefined
+  private readonly dataDirectory: string | undefined
+  private readonly onModelLine: ((line: string) => void) | undefined
 
   /**
    * Store this context is bound to, if any.
@@ -81,9 +115,18 @@ export class Context {
    */
   readonly autoSave: boolean
   /**
-   * Size of the model's context window in tokens, if known.
+   * Size of the model's context window in tokens, if known. Set by the
+   * constructor, by `initRemote()`, or directly.
    */
   contextWindow: number | undefined
+  /**
+   * Provider id this conversation runs on.
+   */
+  providerId: string
+  /**
+   * Model id this conversation runs on, when known.
+   */
+  modelId: string | undefined
 
   constructor(initialMessages: readonly ModelMessage[] = [], options: ContextOptions = {}) {
     this.history = [...initialMessages]
@@ -91,6 +134,12 @@ export class Context {
     this.id = options.id ?? randomUUID()
     this.autoSave = options.autoSave ?? true
     this.contextWindow = options.contextWindow
+    this.providerId = options.providerId ?? 'openai'
+    this.modelId = options.modelId
+    this.env = options.env
+    this.catalogUrl = options.catalogUrl
+    this.dataDirectory = options.dataDirectory
+    this.onModelLine = options.onModelLine
   }
 
   /**
@@ -207,11 +256,66 @@ export class Context {
       id: this.id,
       contextWindow: this.contextWindow,
       autoSave: this.autoSave,
+      providerId: this.providerId,
+      modelId: this.modelId,
+      env: this.env,
+      catalogUrl: this.catalogUrl,
+      dataDirectory: this.dataDirectory,
+      onModelLine: this.onModelLine,
     })
     if (this.lastUsage !== undefined) {
       copy.lastUsage = { ...this.lastUsage }
     }
     return copy
+  }
+
+  /**
+   * Fill in `contextWindow` for the configured `modelId`: an explicit
+   * `MINIAGENT_CONTEXT_WINDOW` wins, otherwise the limit is read from the
+   * catalog. Resolves to nothing; the result lands in `contextWindow` and the
+   * `[model] ...` diagnostics go to `onModelLine`.
+   *
+   * Optional and never throws: without a window the context still works,
+   * `remainingTokens` just stays `undefined`.
+   */
+  async initRemote(): Promise<void> {
+    if (this.contextWindow !== undefined || this.modelId === undefined) {
+      return
+    }
+
+    const env = this.env ?? process.env
+    const override = env.MINIAGENT_CONTEXT_WINDOW
+    if (override !== undefined) {
+      const value = Number(override)
+      if (Number.isFinite(value) && value > 0) {
+        this.contextWindow = value
+        return
+      }
+      this.log(`[model] ignoring invalid MINIAGENT_CONTEXT_WINDOW="${override}"`)
+    }
+
+    try {
+      const limits = await fetchModelLimits(this.modelId, {
+        provider: this.providerId,
+        cacheFile:
+          this.dataDirectory === undefined ? undefined : join(this.dataDirectory, 'models.json'),
+        catalogUrl: this.catalogUrl,
+      })
+      if (limits?.contextWindow === undefined) {
+        this.log(`[model] no context window in catalog for "${this.modelId}"`)
+        return
+      }
+      this.contextWindow = limits.contextWindow
+      this.log(
+        `[model] ${limits.id}: ${limits.contextWindow.toLocaleString('en-US')} token context window`,
+      )
+    } catch (error) {
+      this.log(`[model] could not read model limits: ${String(error)}`)
+    }
+  }
+
+  private log(line: string): void {
+    this.onModelLine?.(line)
   }
 
   /**
@@ -236,7 +340,13 @@ export class Context {
     options: Omit<ContextOptions, 'store' | 'id'> = {},
   ): Promise<Context> {
     const snapshot = await store.load(id)
-    const context = new Context(snapshot?.messages ?? [], { ...options, store, id })
+    const context = new Context(snapshot?.messages ?? [], {
+      ...options,
+      store,
+      id,
+      providerId: snapshot?.providerId ?? options.providerId,
+      modelId: snapshot?.modelId ?? options.modelId,
+    })
     if (snapshot?.usage !== undefined) {
       context.lastUsage = { ...snapshot.usage }
     }
@@ -245,6 +355,11 @@ export class Context {
 
   private snapshot(): ContextSnapshot {
     // return shadow copy of the messages
-    return { messages: this.messages, usage: this.usage }
+    return {
+      messages: this.messages,
+      usage: this.usage,
+      providerId: this.providerId,
+      modelId: this.modelId,
+    }
   }
 }

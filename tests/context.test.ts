@@ -1,5 +1,5 @@
 import type { ModelMessage } from 'ai'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Context } from '../src/context.js'
 
@@ -187,5 +187,170 @@ describe('Context token counting', () => {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     })
+  })
+})
+
+function catalogResponse(body: unknown, status = 200): typeof globalThis.fetch {
+  return async () => new Response(JSON.stringify(body), { status })
+}
+
+describe('Context.initRemote', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('reads the context window from the catalog', async () => {
+    const lines: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      catalogResponse({
+        openai: { models: { 'gpt-6-astra': { limit: { context: 1_050_000 } } } },
+      }),
+    )
+    const context = new Context([], {
+      modelId: 'gpt-6-astra',
+      env: {},
+      catalogUrl: 'https://example.test/context-one',
+      onModelLine: (line) => lines.push(line),
+    })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBe(1_050_000)
+    expect(context.remainingTokens).toBe(1_050_000)
+    expect(lines).toEqual(['[model] openai/gpt-6-astra: 1,050,000 token context window'])
+  })
+
+  it('returns nothing', async () => {
+    const context = new Context([], { contextWindow: 1000 })
+
+    await expect(context.initRemote()).resolves.toBeUndefined()
+  })
+
+  it('looks the model up under the configured provider', async () => {
+    const lines: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      catalogResponse({ xai: { models: { 'grok-4.7': { limit: { context: 256_000 } } } } }),
+    )
+    const context = new Context([], {
+      providerId: 'xai',
+      modelId: 'grok-4.7',
+      env: {},
+      catalogUrl: 'https://example.test/context-provider',
+      onModelLine: (line) => lines.push(line),
+    })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBe(256_000)
+    expect(lines[0]).toBe('[model] xai/grok-4.7: 256,000 token context window')
+  })
+
+  it('does nothing without a model id', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const context = new Context()
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBeUndefined()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('keeps an explicit window and skips the catalog', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const context = new Context([], { modelId: 'gpt-6-astra', contextWindow: 2048 })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBe(2048)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('lets MINIAGENT_CONTEXT_WINDOW win over the catalog', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const context = new Context([], {
+      modelId: 'gpt-6-astra',
+      env: { MINIAGENT_CONTEXT_WINDOW: '4096' },
+    })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBe(4096)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reports an invalid override and falls back to the catalog', async () => {
+    const lines: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      catalogResponse({ openai: { models: { 'gpt-6-astra': { limit: { context: 512 } } } } }),
+    )
+    const context = new Context([], {
+      modelId: 'gpt-6-astra',
+      env: { MINIAGENT_CONTEXT_WINDOW: 'nope' },
+      catalogUrl: 'https://example.test/context-two',
+      onModelLine: (line) => lines.push(line),
+    })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBe(512)
+    expect(lines[0]).toBe('[model] ignoring invalid MINIAGENT_CONTEXT_WINDOW="nope"')
+  })
+
+  it('stays without a window when the catalog is unavailable', async () => {
+    const lines: string[] = []
+    vi.stubGlobal('fetch', catalogResponse({ error: 'nope' }, 503))
+    const context = new Context([], {
+      modelId: 'gpt-6-astra',
+      env: {},
+      catalogUrl: 'https://example.test/context-three',
+      onModelLine: (line) => lines.push(line),
+    })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBeUndefined()
+    expect(lines[0]).toContain('[model] could not read model limits')
+  })
+
+  it('reports a model missing from the catalog', async () => {
+    const lines: string[] = []
+    vi.stubGlobal('fetch', catalogResponse({ openai: { models: {} } }))
+    const context = new Context([], {
+      modelId: 'gpt-6-astra',
+      env: {},
+      catalogUrl: 'https://example.test/context-four',
+      onModelLine: (line) => lines.push(line),
+    })
+
+    await context.initRemote()
+
+    expect(context.contextWindow).toBeUndefined()
+    expect(lines[0]).toBe('[model] no context window in catalog for "gpt-6-astra"')
+  })
+
+  it('copies the lookup configuration in clone()', async () => {
+    const lines: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      catalogResponse({ openai: { models: { 'gpt-6-astra': { limit: { context: 777 } } } } }),
+    )
+    const original = new Context([], {
+      modelId: 'gpt-6-astra',
+      env: {},
+      catalogUrl: 'https://example.test/context-five',
+      onModelLine: (line) => lines.push(line),
+    })
+
+    const copy = original.clone()
+    await copy.initRemote()
+
+    expect(copy.contextWindow).toBe(777)
+    expect(lines).toHaveLength(1)
   })
 })

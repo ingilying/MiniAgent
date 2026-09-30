@@ -24,6 +24,10 @@ export interface ContextUsage {
 export interface ContextSnapshot {
   readonly messages: readonly ModelMessage[]
   readonly usage?: ContextUsage
+  /** Provider the conversation was created with, when known. */
+  readonly providerId?: string
+  /** Model the conversation was created with, when known. */
+  readonly modelId?: string
 }
 
 /**
@@ -85,7 +89,16 @@ function toSnapshot(stored: unknown): ContextSnapshot {
     return { messages: stored as ModelMessage[] }
   }
   const snapshot = stored as Partial<ContextSnapshot> | null
-  return { messages: snapshot?.messages ?? [], usage: toUsage(snapshot?.usage) }
+  return {
+    messages: snapshot?.messages ?? [],
+    usage: toUsage(snapshot?.usage),
+    providerId: toText(snapshot?.providerId),
+    modelId: toText(snapshot?.modelId),
+  }
+}
+
+function toText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 /**

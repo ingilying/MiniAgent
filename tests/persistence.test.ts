@@ -190,6 +190,52 @@ describe('Context persistence', () => {
     expect(restored.tokenCount).toBe(44)
   })
 
+  it('persists the provider and model of the session', async () => {
+    const store = new FileContextStore(directory)
+    const context = new Context([], {
+      store,
+      id: 'session-1',
+      providerId: 'openai',
+      modelId: 'gpt-6-astra',
+    }).addUser('hello')
+
+    await context.save()
+
+    expect(await store.load('session-1')).toMatchObject({
+      providerId: 'openai',
+      modelId: 'gpt-6-astra',
+    })
+
+    // the stored pair wins over what the caller passes
+    const restored = await Context.load(store, 'session-1', {
+      providerId: 'other',
+      modelId: 'other-model',
+    })
+    expect(restored.providerId).toBe('openai')
+    expect(restored.modelId).toBe('gpt-6-astra')
+  })
+
+  it('falls back to the passed provider and model for legacy files', async () => {
+    const store = new FileContextStore(directory)
+    await writeFile(
+      join(directory, 'legacy.json'),
+      JSON.stringify([{ role: 'user', content: 'hello' }]),
+      'utf8',
+    )
+
+    const restored = await Context.load(store, 'legacy', {
+      providerId: 'openai',
+      modelId: 'gpt-6-astra',
+    })
+
+    expect(restored.providerId).toBe('openai')
+    expect(restored.modelId).toBe('gpt-6-astra')
+  })
+
+  it('defaults the provider to openai', () => {
+    expect(new Context().providerId).toBe('openai')
+  })
+
   it('auto-saves the history and usage after an agent run', async () => {
     const store = new FileContextStore(directory)
     const model = new MockLanguageModelV4({
