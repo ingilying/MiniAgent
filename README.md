@@ -15,39 +15,92 @@ rather than the SDK's own `ToolLoopAgent` abstraction.
 pnpm install
 ```
 
-Then set your OpenAI credentials — either in the environment or in a `.env` file
-(loaded automatically, see [src/index.ts](src/index.ts)):
+Then set your credentials. `App.run()` reads `config.json` from the data
+directory (`$HOME/.config/miniagent/config.json` in a release build,
+`.miniagent/config.json` in the checkout) and always merges `.env` from the
+current directory into the environment (see [src/app.ts](src/app.ts)); variables
+already set in the environment win, and a missing file is not an error.
+
+```jsonc
+// <dataDirectory>/config.json — every field is optional
+{
+  "provider": "openai",
+  "model": "gpt-6-astra",
+  "apiKeys": { "openai": "sk-..." },
+}
+```
 
 ```sh
+# equivalent environment fallbacks
 OPENAI_API_KEY=sk-...
-# optional, defaults to gpt-6-astra
 OPENAI_MODEL=gpt-6-astra
-# optional, name of the persisted REPL session, defaults to "default"
+# optional, session name used when MINIAGENT_SESSION is unset, defaults to "default"
 MINIAGENT_SESSION=default
 # optional, overrides the context window read from the model catalog
 MINIAGENT_CONTEXT_WINDOW=128000
 ```
 
+For a fresh session the config file wins over the environment: provider =
+`config.provider` else `openai`; model = `config.model` else `OPENAI_MODEL` else
+`gpt-6-astra`; API key = `config.apiKeys[provider]` else the provider's env var
+(`OPENAI_API_KEY`). A stored session keeps the provider and model it was created
+with, whatever the config file now says.
+
 ## Usage
 
 ```sh
-# interactive REPL (history is persisted and restored across restarts)
 pnpm dev
-
-# single-shot mode (ephemeral context)
-pnpm dev "What is 17 * 23? Also, what time is it in Seoul right now?"
 ```
 
-Both modes stream the agent's answer to the terminal, log tool calls, tool
-results, and step boundaries, and print the token usage of the conversation:
+`App.run()` only loads the configuration and builds the agent: it merges `.env`,
+reads `config.json`, restores the session's `Context` (which keeps its stored
+provider and model), lets it resolve its context window from the
+[models.dev](https://models.dev) catalog, and constructs the `Agent` through the
+provider registry. The resolved values are then exposed for whatever drives the
+conversation:
 
-```
-Restored session "default": 6 messages, [tokens] 214 / 128,000 (0.2%).
+```ts
+const app = new App()
+const code = await app.run()
+
+app.prompt // first positional argument, if any
+app.session // MINIAGENT_SESSION, or the default session name
+app.providerId // provider id the session runs on
+app.modelId // model id the session runs on
+app.context // the session's Context, window resolved
+app.agent // the built Agent (or the injected one), bound to app.context
+app.dataDirectory // .miniagent, or $HOME/.config/miniagent in a release build
+app.version // version stamped into this build
 ```
 
-The REPL keeps a `Context` with the full conversation history and saves it to
-`.miniagent/contexts/<session>.json` after every turn, so a restart resumes the
-conversation.
+Providers live in [src/providers.ts](src/providers.ts): a table keyed by
+provider id, each entry holding the env var for its key and a factory.
+`openai`, `anthropic`, and `google` are built in; any other id with a
+`baseUrl` becomes an OpenAI-compatible provider. Adding another built-in is
+one entry.
+
+It prints the `[model] ...` context-window diagnostics as it resolves them, and
+returns exit code `1` when the provider is unknown or its key is missing. The
+model cache, the config file, and any persisted sessions live in
+`app.dataDirectory`: `.miniagent` in a development build,
+`$HOME/.config/miniagent` in a release build. Talking to the user (REPL,
+web server, ...) is a layer on top of `app.agent`, not part of `App`.
+
+### Development vs release builds
+
+TypeScript has no build-time `define`, so the release sign is passed as an
+environment variable to a small generator that writes it into a source file
+before `tsc` runs:
+
+```sh
+MINIAGENT_RELEASE=1 pnpm build   # release build
+pnpm build                       # development build
+```
+
+`scripts/build-info.mjs` writes `src/build-info.ts` (gitignored) holding
+`RELEASE` and the `VERSION` from `package.json`; `src/app.ts` imports them and
+picks the data directory from `RELEASE`. `build`, `dev`, `typecheck`, and `test`
+all run the generator first, and `postinstall` covers a fresh clone.
 
 ## The Agent class
 
@@ -61,10 +114,16 @@ const agent = new Agent({
   model: openai('gpt-6-astra'), // any AI SDK LanguageModel
   system: 'You are a helpful assistant.',
   tools: { calculator: calculatorTool }, // any AI SDK ToolSet
+  context, // optional member conversation (see below)
   maxSteps: 8, // tool-loop step limit
 })
 
-// Streaming: async generator of typed events
+// With a member context, call it with no input to continue that conversation:
+for await (const event of agent.stream()) {
+  /* ... */
+}
+
+// Or pass input explicitly; a string is added to the member context:
 for await (const event of agent.stream('What is 6 * 7?')) {
   if (event.type === 'text-delta') process.stdout.write(event.text)
   if (event.type === 'tool-result') console.log(event.output)
@@ -93,14 +152,17 @@ const result = await agent.run('What is 6 * 7?')
 history to continue a conversation across runs).
 
 Both methods accept either a plain prompt string or a `ModelMessage[]`
-history, and an optional `AbortSignal`.
+history, and an optional `AbortSignal`. On an `Agent` built with a `context`
+member, calling them with no input continues that conversation, and a string
+input is added to it as a user message.
 
 ### Context (conversation history)
 
 `src/context.ts` exports a `Context` class that stores the conversation
-history. Pass it as the agent input: the current history is sent to the model
-and the messages generated during the run — including tool calls and tool
-results — are appended back into the context afterwards.
+history. Pass it as the agent input, or hand it to the `Agent` as its `context`
+member: the current history is sent to the model and the messages generated
+during the run — including tool calls and tool results — are appended back into
+the context afterwards.
 
 ```ts
 import { Context } from './context.js'
@@ -108,7 +170,10 @@ import { Context } from './context.js'
 const context = new Context()
 context.addUser('What is 6 * 7?')
 
-for await (const event of agent.stream(context)) {
+const agent = new Agent({ model, context })
+
+// no input: the member context is the conversation
+for await (const event of agent.stream()) {
   if (event.type === 'text-delta') process.stdout.write(event.text)
 }
 
@@ -116,7 +181,7 @@ for await (const event of agent.stream(context)) {
 
 // next turn sees the full history:
 context.addUser('and in hex?')
-for await (const event of agent.stream(context)) {
+for await (const event of agent.stream()) {
   /* ... */
 }
 ```
@@ -155,9 +220,13 @@ const resumed = await Context.load(store, 'user-123')
 console.log(resumed.messageCount) // history is back
 ```
 
-- `FileContextStore` writes one JSON file per context id (holding the messages
-  and the last reported usage), atomically (temp file + rename), and sanitizes
-  ids so they cannot escape the directory.
+- `FileContextStore` writes one JSON file per context id (holding the messages,
+  the last reported usage, and the provider and model the session runs on),
+  atomically (temp file + rename), and sanitizes ids so they cannot escape the
+  directory.
+- `Context.load()` prefers the stored provider and model; it only falls back to
+  the passed options for a fresh or legacy file. That is how a restored session
+  keeps working after the config file changes.
 - Auto-save is on by default when a store is bound; disable it per context
   with `new Context([], { store, id, autoSave: false })` and call
   `await context.save()` yourself.
@@ -189,17 +258,21 @@ Things worth knowing:
   cache, so `cacheReadTokens` / `cacheWriteTokens` are reported alongside it
   and not added to `tokenCount` again.
 - Providers that do not report usage leave the count at `0`.
-- The AI SDK does not ship model context-window sizes. The demo reads them from
-  the [models.dev](https://models.dev) catalog ([src/model-info.ts](src/model-info.ts)),
-  cached in `.miniagent/models.json` for an hour, and falls back to
-  `MINIAGENT_CONTEXT_WINDOW` as an override. `remainingTokens` is only available
-  when a window is known.
+- The AI SDK does not ship model context-window sizes. `Context.initRemote()`
+  reads them from the [models.dev](https://models.dev) catalog
+  ([src/model-info.ts](src/model-info.ts)), caches them in
+  `<dataDirectory>/models.json` for an hour, and honours
+  `MINIAGENT_CONTEXT_WINDOW` as an override. The method is optional and never
+  throws; without a window, `remainingTokens` stays `undefined` and the context
+  still works.
+
+```ts
+const context = new Context([], { modelId: 'gpt-6-astra' })
+await context.initRemote() // fills in context.contextWindow
+```
 
 The count is stored together with the history, so a restored session knows its
 size before the next run.
-
-The AI SDK does not ship model context-window sizes, so the window is
-configured by the caller (the demo reads `MINIAGENT_CONTEXT_WINDOW`).
 
 ### Tools
 
@@ -230,6 +303,7 @@ pnpm test
 | `pnpm dev`          | Run the demo agent with tsx (watch)  |
 | `pnpm build`        | Compile to `dist/` (type check + JS) |
 | `pnpm start`        | Run the built output                 |
+| `pnpm build-info`   | Regenerate `src/build-info.ts`       |
 | `pnpm test`         | Run tests once (Vitest)              |
 | `pnpm test:watch`   | Run tests in watch mode              |
 | `pnpm typecheck`    | Type check without emitting          |
@@ -242,14 +316,20 @@ pnpm test
 
 ```
 ├── src/
+│   ├── app.ts             # config load + agent construction
 │   ├── agent.ts           # Agent class (stream + run + tool loop)
+│   ├── build-info.ts      # generated release sign + version (gitignored)
+│   ├── config.ts          # config.json (provider, model, api keys)
 │   ├── context.ts         # Context class (history, persistence, tokens)
 │   ├── model-info.ts      # model limits from the models.dev catalog
+│   ├── providers.ts       # provider table (openai, anthropic, google, compatible)
 │   ├── store.ts           # ContextStore interface + FileContextStore
-│   ├── index.ts           # demo entry point (OpenAI provider, REPL)
+│   ├── index.ts           # entry point (boots the app)
 │   └── tools/             # tool definitions
 │       ├── calculator.ts
 │       └── current-time.ts
+├── scripts/
+│   └── build-info.mjs     # writes src/build-info.ts from the environment
 ├── tests/                 # Vitest tests (mock language model, no network)
 ├── tsconfig.json          # editor + type checking config
 └── tsconfig.build.json    # build (emit) config
