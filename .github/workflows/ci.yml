@@ -1,0 +1,25 @@
+# CI/CD: every push and pull request is formatted, type checked, linted, and
+# tested; the build step compiles the release configuration to prove it.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm install --global pnpm@12
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm check
+      - run: pnpm build
+        env:
+          MINIAGENT_RELEASE: '1'
