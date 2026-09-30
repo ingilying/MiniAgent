@@ -11,6 +11,9 @@ coverage/
 .env
 .env.*
 
+# Generated at build time by scripts/build-info.mjs
+src/build-info.ts
+
 # Logs
 *.log
 

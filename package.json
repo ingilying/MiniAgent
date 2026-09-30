@@ -6,15 +6,17 @@
   "main": "dist/index.js",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch src/index.ts",
+    "build-info": "node scripts/build-info.mjs",
+    "postinstall": "node scripts/build-info.mjs",
+    "build": "pnpm build-info && tsc -p tsconfig.build.json",
+    "dev": "pnpm build-info && tsx watch src/index.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "start": "node dist/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
+    "test": "pnpm build-info && vitest run",
+    "test:watch": "pnpm build-info && vitest",
+    "typecheck": "pnpm build-info && tsc --noEmit",
     "check": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "engines": {
