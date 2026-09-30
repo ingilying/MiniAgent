@@ -286,4 +286,52 @@ describe('Agent with Context', () => {
 
     expect(context.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
   })
+
+  it('uses the member context when called without an input', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Hello!' },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
+      }),
+    })
+    const context = new Context().addUser('hi')
+    const agent = new Agent({ model, context })
+
+    const events: AgentEvent[] = []
+    for await (const event of agent.stream()) {
+      events.push(event)
+    }
+
+    expect(agent.context).toBe(context)
+    expect(textOf(events)).toBe('Hello!')
+    expect(context.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
+  })
+
+  it('adds a string input to the member context', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: {
+        content: [{ type: 'text', text: 'Hello!' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage,
+        warnings: [],
+      },
+    })
+    const context = new Context().addUser('earlier')
+    const agent = new Agent({ model, context })
+
+    await agent.run('next question')
+
+    expect(context.messages.map((message) => message.role)).toEqual(['user', 'user', 'assistant'])
+    expect(context.messages.slice(0, 2).map((message) => message.content)).toEqual([
+      'earlier',
+      'next question',
+    ])
+  })
 })

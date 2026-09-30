@@ -37,6 +37,11 @@ export interface AgentOptions {
    */
   readonly tools?: ToolSet
   /**
+   * Conversation this agent works on by default. When set, `stream()` and
+   * `run()` use it whenever they are called without an input.
+   */
+  readonly context?: Context
+  /**
    * Maximum number of steps (model calls) before the tool loop is stopped.
    *
    * @default 10
@@ -117,6 +122,7 @@ export class Agent {
   readonly model: LanguageModel
   readonly system: string | undefined
   readonly tools: ToolSet | undefined
+  readonly context: Context | undefined
   readonly maxSteps: number
   readonly temperature: number | undefined
   readonly maxOutputTokens: number | undefined
@@ -125,6 +131,7 @@ export class Agent {
     this.model = options.model
     this.system = options.system
     this.tools = options.tools
+    this.context = options.context
     this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS
     this.temperature = options.temperature
     this.maxOutputTokens = options.maxOutputTokens
@@ -136,12 +143,14 @@ export class Agent {
    * and the final finish event.
    *
    * If a `Context` is passed as the input, the messages generated during the
-   * run are appended to it once the stream has finished.
+   * run are appended to it once the stream has finished. Called without an
+   * input, the agent uses its member context when it has one.
    *
    * Errors are not thrown; they are yielded as `{ type: 'error' }` events
    * (matching `streamText` behavior of keeping the stream alive).
    */
-  async *stream(input: AgentInput, options: AgentCallOptions = {}): AsyncGenerator<AgentEvent> {
+  async *stream(input?: AgentInput, options: AgentCallOptions = {}): AsyncGenerator<AgentEvent> {
+    const { context, messages } = this.conversation(input)
     const result = streamText({
       model: this.model,
       system: this.system,
@@ -149,7 +158,7 @@ export class Agent {
       stopWhen: isStepCount(this.maxSteps),
       temperature: this.temperature,
       maxOutputTokens: this.maxOutputTokens,
-      messages: toMessages(input),
+      messages,
       abortSignal: options.abortSignal,
     })
 
@@ -206,7 +215,7 @@ export class Agent {
       }
     }
 
-    if (input instanceof Context) {
+    if (context !== undefined) {
       let messages: ModelMessage[] | undefined
       let usage: LanguageModelUsage | undefined
       try {
@@ -216,11 +225,11 @@ export class Agent {
         // The run failed; its error was already yielded as an 'error' event.
       }
       if (messages !== undefined) {
-        input.append(messages)
+        context.append(messages)
         if (usage !== undefined) {
-          input.recordUsage(usage)
+          context.recordUsage(usage)
         }
-        await saveIfBound(input)
+        await saveIfBound(context)
       }
     }
   }
@@ -230,9 +239,11 @@ export class Agent {
    * result, including all steps, tool calls, and usage.
    *
    * If a `Context` is passed as the input, the messages generated during the
-   * run are appended to it.
+   * run are appended to it. Called without an input, the agent uses its member
+   * context when it has one.
    */
-  async run(input: AgentInput, options: AgentCallOptions = {}): Promise<AgentRunResult> {
+  async run(input?: AgentInput, options: AgentCallOptions = {}): Promise<AgentRunResult> {
+    const { context, messages } = this.conversation(input)
     const result = await generateText({
       model: this.model,
       system: this.system,
@@ -240,17 +251,17 @@ export class Agent {
       stopWhen: isStepCount(this.maxSteps),
       temperature: this.temperature,
       maxOutputTokens: this.maxOutputTokens,
-      messages: toMessages(input),
+      messages,
       abortSignal: options.abortSignal,
     })
 
-    if (input instanceof Context) {
-      input.append(result.responseMessages)
+    if (context !== undefined) {
+      context.append(result.responseMessages)
       const lastStep = result.steps.at(-1)
       if (lastStep !== undefined) {
-        input.recordUsage(lastStep.usage)
+        context.recordUsage(lastStep.usage)
       }
-      await saveIfBound(input)
+      await saveIfBound(context)
     }
 
     return {
@@ -263,6 +274,40 @@ export class Agent {
       responseMessages: result.responseMessages,
     }
   }
+
+  /**
+   * Works out which conversation a call operates on and the messages to send.
+   *
+   * - A `Context` input is used as is.
+   * - With a member context, a string input is added to it as a user message
+   *   and the whole history is sent.
+   * - With a member context, no input uses its history unchanged.
+   * - Otherwise the input is ephemeral: a string becomes a single user
+   *   message, an array is sent as is, and no input means an empty history.
+   */
+  private conversation(input: AgentInput | undefined): {
+    context: Context | undefined
+    messages: ModelMessage[]
+  } {
+    if (input instanceof Context) {
+      return { context: input, messages: [...input.messages] }
+    }
+
+    if (typeof input === 'string') {
+      if (this.context === undefined) {
+        return { context: undefined, messages: [{ role: 'user', content: input }] }
+      }
+      this.context.addUser(input)
+      return { context: this.context, messages: [...this.context.messages] }
+    }
+
+    if (input === undefined) {
+      const context = this.context ?? new Context()
+      return { context, messages: [...context.messages] }
+    }
+
+    return { context: undefined, messages: [...input] }
+  }
 }
 
 /**
@@ -272,14 +317,4 @@ async function saveIfBound(context: Context): Promise<void> {
   if (context.autoSave && context.store !== undefined) {
     await context.save()
   }
-}
-
-function toMessages(input: AgentInput): ModelMessage[] {
-  if (typeof input === 'string') {
-    return [{ role: 'user', content: input }]
-  }
-  if (input instanceof Context) {
-    return [...input.messages]
-  }
-  return input
 }
