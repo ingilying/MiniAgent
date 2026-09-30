@@ -36,7 +36,10 @@
     "vitest": "^5.0.2"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.68",
+    "@ai-sdk/google": "^4.0.85",
     "@ai-sdk/openai": "^4.0.78",
+    "@ai-sdk/openai-compatible": "^3.0.59",
     "ai": "^7.0.116",
     "zod": "^4.6.5"
   }
