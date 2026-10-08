@@ -7,10 +7,10 @@ import { readFile } from 'node:fs/promises'
  * {
  *   "provider": "openai",
  *   "model": "gpt-6-astra",
- *   "apiKeys": { "openai": "sk-..." },
  *   "providers": {
- *     "ollama": { "baseUrl": "http://localhost:11434/v1" },
- *     "openai": { "baseUrl": "https://proxy.example.com/v1", "apiKey": "sk-..." }
+ *     "ollama": { "baseURL": "http://localhost:11434/v1" },
+ *     "openai": { "baseURL": "https://proxy.example.com/v1", "apiKey": "sk-..." },
+ *     "deepseek": { "apiKey": "sk-..." }
  *   }
  * }
  * ```
@@ -24,8 +24,6 @@ export interface AppConfig {
   readonly provider?: string
   /** Default model id for a fresh session. */
   readonly model?: string
-  /** API keys keyed by provider id. */
-  readonly apiKeys?: Readonly<Record<string, string>>
   /** Per-provider settings keyed by provider id. */
   readonly providers?: Readonly<Record<string, ProviderConfig>>
 }
@@ -36,8 +34,8 @@ export interface ProviderConfig {
    * Custom endpoint, e.g. `http://localhost:11434/v1`. With it, any id
    * becomes an OpenAI-compatible provider and the API key is optional.
    */
-  readonly baseUrl?: string
-  /** API key for this provider. Wins over `apiKeys` and the environment. */
+  readonly baseURL?: string
+  /** API key for this provider. */
   readonly apiKey?: string
 }
 
@@ -76,7 +74,6 @@ function toConfig(value: unknown): AppConfig {
   return {
     provider: toText(record.provider),
     model: toText(record.model),
-    apiKeys: toApiKeys(record.apiKeys),
     providers: toProviders(record.providers),
   }
 }
@@ -86,34 +83,19 @@ function toProviders(value: unknown): Record<string, ProviderConfig> | undefined
     return undefined
   }
 
-  const providers: Record<string, ProviderConfig> = {}
+  const providers: Record<string, ProviderConfig> = Object.create(null)
   for (const [id, entry] of Object.entries(value)) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       continue
     }
     const record = entry as Record<string, unknown>
-    const baseUrl = toText(record.baseUrl)
+    const baseURL = toText(record.baseURL)
     const apiKey = toText(record.apiKey)
-    if (baseUrl !== undefined || apiKey !== undefined) {
-      providers[id] = { baseUrl, apiKey }
+    if (baseURL !== undefined || apiKey !== undefined) {
+      providers[id] = { baseURL, apiKey }
     }
   }
   return Object.keys(providers).length === 0 ? undefined : providers
-}
-
-function toApiKeys(value: unknown): Record<string, string> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined
-  }
-
-  const keys: Record<string, string> = {}
-  for (const [id, key] of Object.entries(value)) {
-    const text = toText(key)
-    if (text !== undefined) {
-      keys[id] = text
-    }
-  }
-  return keys
 }
 
 function toText(value: unknown): string | undefined {

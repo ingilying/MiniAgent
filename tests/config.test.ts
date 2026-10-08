@@ -25,13 +25,13 @@ describe('loadConfig', () => {
     expect(await loadConfig(configPath())).toEqual({})
   })
 
-  it('reads provider, model and api keys', async () => {
+  it('reads provider, model and provider settings', async () => {
     await writeFile(
       configPath(),
       JSON.stringify({
         provider: 'openai',
         model: 'gpt-6-astra',
-        apiKeys: { openai: 'sk-test' },
+        providers: { openai: { apiKey: 'sk-test' } },
       }),
       'utf8',
     )
@@ -39,7 +39,7 @@ describe('loadConfig', () => {
     expect(await loadConfig(configPath())).toEqual({
       provider: 'openai',
       model: 'gpt-6-astra',
-      apiKeys: { openai: 'sk-test' },
+      providers: { openai: { apiKey: 'sk-test' } },
     })
   })
 
@@ -52,14 +52,18 @@ describe('loadConfig', () => {
   it('drops fields of the wrong type', async () => {
     await writeFile(
       configPath(),
-      JSON.stringify({ provider: 7, model: '', apiKeys: { openai: 3, xai: 'x' } }),
+      JSON.stringify({
+        provider: 7,
+        model: '',
+        providers: { openai: 3, xai: { apiKey: 'x' } },
+      }),
       'utf8',
     )
 
     expect(await loadConfig(configPath())).toEqual({
       provider: undefined,
       model: undefined,
-      apiKeys: { xai: 'x' },
+      providers: { xai: { apiKey: 'x' } },
     })
   })
 
@@ -68,7 +72,7 @@ describe('loadConfig', () => {
       configPath(),
       JSON.stringify({
         providers: {
-          ollama: { baseUrl: 'http://localhost:11434/v1' },
+          ollama: { baseURL: 'http://localhost:11434/v1' },
           openai: { apiKey: 'sk-inline' },
         },
       }),
@@ -77,7 +81,7 @@ describe('loadConfig', () => {
 
     expect(await loadConfig(configPath())).toEqual({
       providers: {
-        ollama: { baseUrl: 'http://localhost:11434/v1' },
+        ollama: { baseURL: 'http://localhost:11434/v1' },
         openai: { apiKey: 'sk-inline' },
       },
     })
@@ -86,12 +90,12 @@ describe('loadConfig', () => {
   it('drops provider entries that configure nothing', async () => {
     await writeFile(
       configPath(),
-      JSON.stringify({ providers: { ollama: 7, empty: {}, good: { baseUrl: 'http://x/v1' } } }),
+      JSON.stringify({ providers: { ollama: 7, empty: {}, good: { baseURL: 'http://x/v1' } } }),
       'utf8',
     )
 
     expect(await loadConfig(configPath())).toEqual({
-      providers: { good: { baseUrl: 'http://x/v1' } },
+      providers: { good: { baseURL: 'http://x/v1' } },
     })
   })
 
