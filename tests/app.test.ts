@@ -63,13 +63,13 @@ afterEach(async () => {
 })
 
 describe('App', () => {
-  it('returns 1 and explains when the API key is missing', async () => {
+  it('lets the SDK handle a missing API key', async () => {
     const out = sink()
     const err = sink()
 
     const code = await new App({
       args: [],
-      env: {},
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
       dataDirectory: directory,
@@ -77,15 +77,15 @@ describe('App', () => {
       errorOutput: err.stream,
     }).run()
 
-    expect(code).toBe(1)
-    expect(err.text()).toMatch(/Missing API key for provider "openai"/)
+    expect(code).toBe(0)
+    expect(err.text()).toBe('')
     expect(out.text()).toBe('')
   })
 
-  it('builds nothing when the credentials are missing', async () => {
+  it('builds the agent without an API key in the config file', async () => {
     const app = new App({
       args: [],
-      env: {},
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
       dataDirectory: directory,
@@ -94,8 +94,8 @@ describe('App', () => {
 
     const code = await app.run()
 
-    expect(code).toBe(1)
-    expect(app.agent).toBeUndefined()
+    expect(code).toBe(0)
+    expect(app.agent).toBeDefined()
     expect(app.providerId).toBe('openai')
     expect(app.modelId).toBe('gpt-6-astra')
   })
@@ -311,7 +311,7 @@ describe('App config file', () => {
   it('uses an API key from the file when the environment has none', async () => {
     const configFile = await writeConfig({
       model: 'gpt-6-astra',
-      apiKeys: { openai: 'from-config' },
+      providers: { openai: { apiKey: 'from-config' } },
     })
 
     const instance = app({ configFile, env: { MINIAGENT_CONTEXT_WINDOW: '1000' } })
@@ -321,12 +321,12 @@ describe('App config file', () => {
     expect(instance.agent).toBeDefined()
   })
 
-  it('falls back to the provider env var for the API key', async () => {
+  it('boots without a configured API key and leaves the environment to the SDK', async () => {
     const configFile = await writeConfig({ model: 'gpt-6-astra' })
 
     const instance = app({
       configFile,
-      env: { OPENAI_API_KEY: 'from-env', MINIAGENT_CONTEXT_WINDOW: '1000' },
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
     })
 
     expect(await instance.run()).toBe(0)
@@ -348,7 +348,7 @@ describe('App config file', () => {
   })
 
   it('rejects a provider it does not know', async () => {
-    const configFile = await writeConfig({ provider: 'who-knows', apiKeys: { 'who-knows': 'x' } })
+    const configFile = await writeConfig({ provider: 'who-knows' })
     const err = sink()
 
     const code = await new App({
@@ -367,30 +367,32 @@ describe('App config file', () => {
     expect(err.text()).toContain('openai, anthropic, google')
   })
 
-  it('rejects a configured id without a baseUrl', async () => {
-    const configFile = await writeConfig({ provider: 'ollama', apiKeys: { ollama: 'x' } })
-    const err = sink()
+  it('boots a configured id without a baseURL as OpenAI-compatible', async () => {
+    const configFile = await writeConfig({
+      provider: 'ollama',
+      model: 'qwen3',
+      providers: { ollama: { apiKey: 'x' } },
+    })
 
     const code = await new App({
       args: [],
-      env: {},
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
       configFile,
       output: sink().stream,
-      errorOutput: err.stream,
+      errorOutput: sink().stream,
       agent: textAgent('hi'),
     }).run()
 
-    expect(code).toBe(1)
-    expect(err.text()).toContain('Unknown provider "ollama"')
+    expect(code).toBe(0)
   })
 
   it('boots an OpenAI-compatible endpoint without an API key', async () => {
     const configFile = await writeConfig({
       provider: 'ollama',
       model: 'qwen3',
-      providers: { ollama: { baseUrl: 'http://localhost:11434/v1' } },
+      providers: { ollama: { baseURL: 'http://localhost:11434/v1' } },
     })
 
     const code = await new App({
@@ -406,16 +408,36 @@ describe('App config file', () => {
     expect(code).toBe(0)
   })
 
-  it('lets providers.<id>.apiKey win over apiKeys and the environment', async () => {
+  it('boots DeepSeek from the custom provider module', async () => {
+    const configFile = await writeConfig({
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+      providers: { deepseek: { apiKey: 'x' } },
+    })
+
+    const code = await new App({
+      args: [],
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
+      envFile: false,
+      dataDirectory: directory,
+      configFile,
+      output: sink().stream,
+      errorOutput: sink().stream,
+      agent: textAgent('hi'),
+    }).run()
+
+    expect(code).toBe(0)
+  })
+
+  it('takes the API key from providers.<id>.apiKey', async () => {
     const configFile = await writeConfig({
       model: 'gpt-6-astra',
-      apiKeys: { openai: 'from-api-keys' },
       providers: { openai: { apiKey: 'from-providers' } },
     })
 
     const instance = app({
       configFile,
-      env: { OPENAI_API_KEY: 'from-env', MINIAGENT_CONTEXT_WINDOW: '1000' },
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
     })
 
     expect(await instance.run()).toBe(0)

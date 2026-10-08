@@ -8,8 +8,9 @@ import { NoSuchProviderError } from 'ai'
 import { Agent } from './agent.js'
 import { type AppConfig, loadConfig } from './config.js'
 import { Context } from './context.js'
-import { createModel, loadSettings, providerEnvVar, providerList } from './providers.js'
-import type { ProviderOptions } from './providers.js'
+import { deepseekProvider } from './deepseek.js'
+import { loadProviders } from './providers.js'
+import type { Providers, ProviderOptions } from './providers.js'
 import { FileContextStore } from './store.js'
 import { calculatorTool } from './tools/calculator.js'
 import { getCurrentTimeTool } from './tools/current-time.js'
@@ -119,6 +120,8 @@ export class App {
   /** Agent built by `run()` (or the injected one). */
   agent: Agent | undefined
 
+  providers: Providers | undefined
+
   constructor(options: AppOptions = {}) {
     this.args = options.args ?? process.argv.slice(2)
     this.env = options.env ?? process.env
@@ -137,9 +140,10 @@ export class App {
 
   /**
    * Loads the configuration and builds the agent. Returns `1` when the
-   * provider is unknown or its API key is missing, `0` otherwise.
+   * settings are rejected or the provider is unknown, `0` otherwise.
    */
   async run(): Promise<number> {
+    // initializing
     this.readEnvFile()
     const config = await this.readConfig()
 
@@ -151,14 +155,25 @@ export class App {
     this.providerId = context.providerId
     this.modelId = context.modelId ?? this.defaultModel
 
-    loadSettings(this.providerSettings(config))
+    const settings = this.providerSettings(config)
+    try {
+      this.providers = loadProviders()
+
+      // loading custom providers, before the first model is created
+      this.providers.add('deepseek', deepseekProvider)
+
+      this.providers.loadConfig(settings)
+    } catch (error) {
+      this.error(error instanceof Error ? error.message : String(error))
+      return 1
+    }
 
     try {
-      createModel(this.providerId, this.modelId)
+      this.providers.createModel(this.providerId, this.modelId)
     } catch (error) {
       if (NoSuchProviderError.isInstance(error)) {
         this.error(
-          `Unknown provider "${this.providerId}". Known providers: ${providerList().join(', ')}.`,
+          `Unknown provider "${this.providerId}". Known providers: ${error.availableProviders.join(', ')}.`,
         )
       } else {
         this.error(error instanceof Error ? error.message : String(error))
@@ -166,18 +181,9 @@ export class App {
       return 1
     }
 
-    const apiKey = this.resolveApiKey(this.providerId, config)
-    const baseUrl = config.providers?.[this.providerId]?.baseUrl
-    if (apiKey === undefined && baseUrl === undefined) {
-      this.error(
-        `Missing API key for provider "${this.providerId}". ` + this.apiKeyHint(this.providerId),
-      )
-      return 1
-    }
-
     if (this.injectedAgent === undefined) {
       try {
-        this.agent = this.buildAgent(this.providerId, this.modelId, context)
+        this.agent = this.buildAgent(this.providers, this.providerId, this.modelId, context)
       } catch (error) {
         this.error(error instanceof Error ? error.message : String(error))
         return 1
@@ -239,53 +245,24 @@ export class App {
 
   /**
    * Per-provider settings for the registry: the config file's `providers`
-   * block with every API key resolved (config file, then environment).
+   * block. Environment variables stay with the AI SDK.
    */
   private providerSettings(config: AppConfig): Record<string, ProviderOptions> {
-    const settings: Record<string, ProviderOptions> = {}
-    const ids = new Set([
-      ...Object.keys(config.providers ?? {}),
-      ...Object.keys(config.apiKeys ?? {}),
-    ])
-    for (const id of ids) {
-      settings[id] = {
-        apiKey: this.resolveApiKey(id, config),
-        baseUrl: config.providers?.[id]?.baseUrl,
-      }
+    const settings: Record<string, ProviderOptions> = Object.create(null)
+    for (const [id, entry] of Object.entries(config.providers ?? {})) {
+      settings[id] = { apiKey: entry.apiKey, baseURL: entry.baseURL }
     }
     return settings
   }
 
-  /** API key for a provider: `providers.<id>.apiKey`, then `apiKeys.<id>`, then the env var. */
-  private resolveApiKey(providerId: string, config: AppConfig): string | undefined {
-    const fromProvider = config.providers?.[providerId]?.apiKey
-    if (fromProvider !== undefined) {
-      return fromProvider
-    }
-    const fromConfig = config.apiKeys?.[providerId]
-    if (fromConfig !== undefined) {
-      return fromConfig
-    }
-    const envVar = providerEnvVar(providerId)
-    const fromEnv = envVar === undefined ? undefined : this.env[envVar]
-    return fromEnv === undefined || fromEnv === '' ? undefined : fromEnv
-  }
-
-  private apiKeyHint(providerId: string): string {
-    const sources: string[] = []
-    if (this.configFile !== false) {
-      sources.push(`providers.${providerId}.apiKey or apiKeys.${providerId} in ${this.configFile}`)
-    }
-    const envVar = providerEnvVar(providerId)
-    if (envVar !== undefined) {
-      sources.push(`${envVar} in the environment`)
-    }
-    return sources.length === 0 ? '' : `Set ${sources.join(' or ')}.`
-  }
-
-  private buildAgent(providerId: string, modelId: string, context: Context): Agent {
+  private buildAgent(
+    providers: Providers,
+    providerId: string,
+    modelId: string,
+    context: Context,
+  ): Agent {
     return new Agent({
-      model: createModel(providerId, modelId),
+      model: providers.createModel(providerId, modelId),
       system: SYSTEM_PROMPT,
       tools: { calculator: calculatorTool, getCurrentTime: getCurrentTimeTool },
       context,
