@@ -26,7 +26,10 @@ already set in the environment win, and a missing file is not an error.
 {
   "provider": "openai",
   "model": "gpt-6-astra",
-  "apiKeys": { "openai": "sk-..." },
+  "providers": {
+    "openai": { "apiKey": "sk-..." },
+    "ollama": { "baseURL": "http://localhost:11434/v1" }
+  }
 }
 ```
 
@@ -42,9 +45,10 @@ MINIAGENT_CONTEXT_WINDOW=128000
 
 For a fresh session the config file wins over the environment: provider =
 `config.provider` else `openai`; model = `config.model` else `OPENAI_MODEL` else
-`gpt-6-astra`; API key = `config.apiKeys[provider]` else the provider's env var
-(`OPENAI_API_KEY`). A stored session keeps the provider and model it was created
-with, whatever the config file now says.
+`gpt-6-astra`; API key = `config.providers[provider].apiKey`, else the
+provider's env var (`OPENAI_API_KEY`) resolved inside the AI SDK. A stored
+session keeps the provider and model it was created with, whatever the config
+file now says.
 
 ## Usage
 
@@ -73,14 +77,19 @@ app.dataDirectory // .miniagent, or $HOME/.config/miniagent in a release build
 app.version // version stamped into this build
 ```
 
-Providers live in [src/providers.ts](src/providers.ts): a table keyed by
-provider id, each entry holding the env var for its key and a factory.
-`openai`, `anthropic`, and `google` are built in; any other id with a
-`baseUrl` becomes an OpenAI-compatible provider. Adding another built-in is
-one entry.
+Providers live in [src/providers.ts](src/providers.ts): the `Providers` class
+holds the AI SDK registry and a table of provider id and create function.
+`openai`, `anthropic`, and `google` are built in; `deepseek` registers as a
+custom provider module ([src/deepseek.ts](src/deepseek.ts)) through
+`providers.add(id, create)`, and the config file applies through
+`providers.loadConfig(settings)`, initialising the provider under the same id
+with its settings. Any other id becomes an OpenAI-compatible provider built
+from its settings. Adding another built-in is one create function in the
+constructor.
 
 It prints the `[model] ...` context-window diagnostics as it resolves them, and
-returns exit code `1` when the provider is unknown or its key is missing. The
+returns exit code `1` when the provider is unknown or its settings are
+rejected. The
 model cache, the config file, and any persisted sessions live in
 `app.dataDirectory`: `.miniagent` in a development build,
 `$HOME/.config/miniagent` in a release build. Talking to the user (REPL,
