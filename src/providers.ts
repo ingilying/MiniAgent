@@ -1,103 +1,134 @@
-import { NoSuchProviderError } from 'ai'
-import type { LanguageModel } from 'ai'
+import { NoSuchProviderError, createProviderRegistry } from 'ai'
+import type { LanguageModel, Provider } from 'ai'
 
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createGoogle } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 
-/** Per-provider settings from config.json and the environment. */
+/** Per-provider settings from the config file. */
 export interface ProviderOptions {
-  /** API key for this provider, when the caller resolved one. */
+  /** API key for this provider, when the config file has one. */
   readonly apiKey?: string
   /** Custom endpoint: an OpenAI-compatible server or a provider proxy. */
-  readonly baseUrl?: string
-}
-
-/** A provider client: enough to ask it for a language model. */
-type AiProvider = { languageModel(modelId: string): LanguageModel }
-
-/** One built-in provider: its key env var and how to build its client. */
-interface BuiltIn {
-  /** Environment variable holding the API key when config.json does not. */
-  readonly envVar: string
-  /** Builds the AI SDK provider from the resolved options. */
-  create(options: ProviderOptions): AiProvider
+  readonly baseURL?: string
 }
 
 /**
- * Built-in providers, keyed by the id used in config.json and in the session
- * snapshot. Adding a provider is one entry here. An id with a `baseUrl` that
- * is not listed becomes an OpenAI-compatible provider instead.
+ * The app's view of the AI SDK provider registry: the store of loaded
+ * providers. `providers` and `registerProvider` are untyped but public at
+ * runtime: `createProviderRegistry` builds on exactly this surface
+ * (ai/dist/index.js).
  */
-const BUILT_IN: Readonly<Record<string, BuiltIn>> = {
-  openai: {
-    envVar: 'OPENAI_API_KEY',
-    create: ({ apiKey, baseUrl }) => createOpenAI({ apiKey, baseURL: baseUrl }),
-  },
-  anthropic: {
-    envVar: 'ANTHROPIC_API_KEY',
-    create: ({ apiKey, baseUrl }) => createAnthropic({ apiKey, baseURL: baseUrl }),
-  },
-  google: {
-    envVar: 'GOOGLE_GENERATIVE_AI_API_KEY',
-    create: ({ apiKey, baseUrl }) => createGoogle({ apiKey, baseURL: baseUrl }),
-  },
-}
-
-let providers = buildProviders({})
-
-/**
- * Replaces the provider set with one built from the settings: the built-ins
- * with their resolved key and `baseUrl`, plus any configured OpenAI-compatible
- * endpoint.
- */
-export function loadSettings(next: Readonly<Record<string, ProviderOptions>> = {}): void {
-  providers = buildProviders(next)
+export interface ProviderRegistry {
+  /** Registered providers by id. The registry's own store. */
+  readonly providers: Record<string, Provider>
+  registerProvider(args: { id: string; provider: Provider }): void
+  getProvider(id: string, modelType: string): Provider
+  languageModel(id: string): LanguageModel
 }
 
 /**
- * Builds the model for one provider id and model id. Throws
- * `NoSuchProviderError` for a provider id that is not loaded.
+ * A loaded provider set. The AI SDK provider registry stores the providers;
+ * a table of provider id and create function keeps each provider's module, so
+ * the config can initialise a provider with settings.
  */
-export function createModel(providerId: string, modelId: string): LanguageModel {
-  const provider = providers[providerId]
-  if (provider === undefined) {
-    throw new NoSuchProviderError({
-      providerId,
-      modelId,
-      modelType: 'languageModel',
-      availableProviders: providerList(),
-    })
+export class Providers {
+  /** The AI SDK provider registry holding the loaded providers. */
+  readonly registry: ProviderRegistry
+
+  /** The provider id and its create function for every loaded provider. */
+  private readonly creators = new Map<string, (options: ProviderOptions) => Provider>()
+
+  constructor() {
+    this.registry = makeRegistry()
+    this.add('openai', ({ apiKey, baseURL }) => createOpenAI({ apiKey, baseURL }))
+    this.add('anthropic', ({ apiKey, baseURL }) => createAnthropic({ apiKey, baseURL }))
+    this.add('google', ({ apiKey, baseURL }) => createGoogle({ apiKey, baseURL }))
   }
-  return provider.languageModel(modelId)
-}
 
-/** Provider ids currently loaded: the built-ins plus configured extras. */
-export function providerList(): string[] {
-  return Object.keys(providers)
-}
-
-/** Environment variable that can hold the API key for a built-in provider. */
-export function providerEnvVar(providerId: string): string | undefined {
-  return BUILT_IN[providerId]?.envVar
-}
-
-function buildProviders(
-  settings: Readonly<Record<string, ProviderOptions>>,
-): Record<string, AiProvider> {
-  const all: Record<string, AiProvider> = {}
-  for (const [id, definition] of Object.entries(BUILT_IN)) {
-    all[id] = definition.create(settings[id] ?? {})
+  /** Adds one provider under the given id: its create function and a first provider at default settings. Wins over a provider already loaded under the id. */
+  add(id: string, create: (options: ProviderOptions) => Provider): void {
+    validateId(id)
+    this.creators.set(id, create)
+    this.insert(id, create({}))
   }
-  for (const [id, options] of Object.entries(settings)) {
-    if (all[id] === undefined && options.baseUrl !== undefined) {
-      all[id] = createOpenAICompatible({
-        name: id,
-        apiKey: options.apiKey,
-        baseURL: options.baseUrl,
-      })
+
+  /**
+   * Applies the config file's provider settings. For each entry, finds the
+   * provider under the same id, removes it, initialises it with the settings,
+   * and inserts it back into the registry. An id without a create function
+   * becomes an OpenAI-compatible provider from its settings.
+   */
+  loadConfig(settings: Readonly<Record<string, ProviderOptions>> = {}): void {
+    for (const [id, options] of Object.entries(settings)) {
+      validateId(id)
+      validateBaseURL(id, options)
+      const create = this.creators.get(id)
+      this.insert(
+        id,
+        create !== undefined
+          ? create(options)
+          : createOpenAICompatible({
+              name: id,
+              apiKey: options.apiKey,
+              // The SDK requires a URL; an absent baseURL stays empty and
+              // fails at request time like any other missing setting.
+              baseURL: options.baseURL ?? '',
+            }),
+      )
     }
   }
-  return all
+
+  /** Builds the model for one provider id and model id. Throws `NoSuchProviderError` for a provider id that is not loaded. */
+  createModel(providerId: string, modelId: string): LanguageModel {
+    if (!Object.hasOwn(this.registry.providers, providerId)) {
+      throw new NoSuchProviderError({
+        providerId,
+        modelId,
+        modelType: 'languageModel',
+        availableProviders: Object.keys(this.registry.providers),
+      })
+    }
+    return this.registry.languageModel(`${providerId}:${modelId}`)
+  }
+
+  /** Replaces the provider under one id in the registry: remove, then insert. */
+  private insert(id: string, provider: Provider): void {
+    delete this.registry.providers[id]
+    this.registry.registerProvider({ id, provider })
+  }
 }
+
+/** Loads the provider set: the built-in providers at AI SDK defaults. */
+export function loadProviders(): Providers {
+  return new Providers()
+}
+
+/**
+ * Creates the AI SDK provider registry that stores the loaded providers, so
+ * model creation and its errors come from the SDK.
+ */
+function makeRegistry(): ProviderRegistry {
+  return createProviderRegistry({}) as unknown as ProviderRegistry
+}
+
+function validateId(id: string): void {
+  if (id === '' || RESERVED_IDS.has(id)) {
+    throw new Error(`Invalid provider id "${id}" in the config file.`)
+  }
+}
+
+function validateBaseURL(id: string, options: ProviderOptions): void {
+  if (options.baseURL === undefined) {
+    return
+  }
+  try {
+    new URL(options.baseURL)
+  } catch {
+    throw new Error(`Invalid baseURL for provider "${id}": "${options.baseURL}".`)
+  }
+}
+
+/** Provider ids a config entry may not use: they would shadow object internals. */
+const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype'])
