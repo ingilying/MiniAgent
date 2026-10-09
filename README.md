@@ -53,7 +53,26 @@ file now says.
 ## Usage
 
 ```sh
-pnpm dev
+pnpm dev                                  # or: pnpm start
+```
+
+The command line is defined in [src/cli.ts](src/cli.ts) with
+[commander](https://github.com/tj/commander.js). It parses the options and boots
+the app with the resulting prompt:
+
+```sh
+miniagent [options] [prompt]
+
+Options:
+  -v, --version  output the version number
+  -h, --help     display help for command
+```
+
+`-v` / `--version` prints the build version and exits without loading any
+configuration:
+
+```sh
+pnpm start -- --version
 ```
 
 `App.run()` only loads the configuration and builds the agent: it merges `.env`,
@@ -328,12 +347,13 @@ pnpm test
 │   ├── app.ts             # config load + agent construction
 │   ├── agent.ts           # Agent class (stream + run + tool loop)
 │   ├── build-info.ts      # generated release sign + version (gitignored)
+│   ├── cli.ts             # command line (commander): version, help, prompt
 │   ├── config.ts          # config.json (provider, model, api keys)
 │   ├── context.ts         # Context class (history, persistence, tokens)
 │   ├── model-info.ts      # model limits from the models.dev catalog
 │   ├── providers.ts       # provider table (openai, anthropic, google, compatible)
 │   ├── store.ts           # ContextStore interface + FileContextStore
-│   ├── index.ts           # entry point (boots the app)
+│   ├── index.ts           # entry point (boots the CLI)
 │   └── tools/             # tool definitions
 │       ├── calculator.ts
 │       └── current-time.ts
