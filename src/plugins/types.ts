@@ -1,8 +1,11 @@
 import type { ToolSet } from 'ai'
 
 import type { Agent } from '../agent.js'
+import type { AgentsManager } from '../agents.js'
 import type { Context } from '../context.js'
+import type { Logger } from '../logger.js'
 import type { Providers } from '../providers.js'
+import type { SessionManager } from '../sessions.js'
 
 /**
  * Narrow view of the app passed to `Plugin.setup`.
@@ -27,6 +30,10 @@ export interface PluginHost {
   readonly modelId: string
   /** Conversation the agent works on. */
   readonly context: Context
+  /** Sessions open in this process plus the history of the directory. */
+  readonly sessions: SessionManager
+  /** Application diagnostics. Prefer it over `console`. */
+  readonly logger: Logger
 }
 
 /**
@@ -39,6 +46,17 @@ export interface PluginHost {
 export interface RunHost {
   /** Built agent. Drive it with `run(input)` or `stream(input)`. */
   agent: Agent
+  /**
+   * Builds an agent for any session, using that session's own provider
+   * and model. Make one per concurrent session instead of sharing.
+   */
+  agentFor: (context: Context) => Agent
+  /**
+   * Registered agents, one per served session. Look one up by session id
+   * and drive it yourself with the full `Agent` API. The default path
+   * for plugins.
+   */
+  agents: AgentsManager
   /** Conversation the agent works on. */
   readonly context: Context
   /** First positional argument, if any. */
@@ -53,6 +71,10 @@ export interface RunHost {
   tools: ToolSet
   /** Directory holding sessions, the config file, and the model cache. */
   readonly dataDirectory: string
+  /** Sessions open in this process plus the history of the directory. */
+  readonly sessions: SessionManager
+  /** Application diagnostics. Prefer it over `console`. */
+  readonly logger: Logger
 }
 
 /**
@@ -74,7 +96,7 @@ export interface Plugin {
   systemPrompt?: () => string | undefined | Promise<string | undefined>
   /**
    * Runs after the agent is built. All `run` methods start concurrently and
-   * share one agent and context; coordinate turns between themselves. A
+   * share one agent and session manager; coordinate turns between themselves. A
    * frontend (TUI, WebUI) drives the agent here and returns `void`.
    */
   run?: (host: RunHost, config?: unknown) => void | Promise<void>

@@ -369,24 +369,41 @@ describe('App config file', () => {
     expect(out.text()).toContain(`[config] could not read ${configFile}`)
   })
 
-  it('rejects a provider it does not know', async () => {
+  it('rejects a provider it does not know when creating the client', async () => {
     const configFile = await writeConfig({ provider: 'who-knows' })
     const err = sink()
 
     const code = await new App({
       args: [],
-      env: {},
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
       configFile,
       output: sink().stream,
       errorOutput: err.stream,
-      agent: textAgent('hi'),
     }).run()
 
     expect(code).toBe(1)
     expect(err.text()).toContain('Unknown provider "who-knows"')
     expect(err.text()).toContain('openai, anthropic, google')
+  })
+
+  it('skips provider validation when the agent is injected', async () => {
+    const configFile = await writeConfig({ provider: 'who-knows' })
+
+    const code = await new App({
+      args: [],
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
+      envFile: false,
+      dataDirectory: directory,
+      configFile,
+      output: sink().stream,
+      errorOutput: sink().stream,
+      agent: textAgent('hi'),
+    }).run()
+
+    // No real model client is created, so there is nothing to validate.
+    expect(code).toBe(0)
   })
 
   it('boots a configured id without a baseURL as OpenAI-compatible', async () => {

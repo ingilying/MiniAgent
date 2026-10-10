@@ -13,6 +13,7 @@ import {
 } from 'ai'
 
 import { Context } from './context.js'
+import type { Logger } from './logger.js'
 
 /**
  * Input for an agent run:
@@ -49,6 +50,10 @@ export interface AgentOptions {
   readonly maxSteps?: number
   readonly temperature?: number
   readonly maxOutputTokens?: number
+  /**
+   * Receives run boundary lines (started, finished) at debug level.
+   */
+  readonly logger?: Logger
 }
 
 export interface AgentCallOptions {
@@ -126,6 +131,7 @@ export class Agent {
   readonly maxSteps: number
   readonly temperature: number | undefined
   readonly maxOutputTokens: number | undefined
+  readonly logger: Logger | undefined
 
   constructor(options: AgentOptions) {
     this.model = options.model
@@ -135,6 +141,7 @@ export class Agent {
     this.maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS
     this.temperature = options.temperature
     this.maxOutputTokens = options.maxOutputTokens
+    this.logger = options.logger
   }
 
   /**
@@ -151,6 +158,9 @@ export class Agent {
    */
   async *stream(input?: AgentInput, options: AgentCallOptions = {}): AsyncGenerator<AgentEvent> {
     const { context, messages } = this.conversation(input)
+    if (context !== undefined) {
+      this.logger?.debug(`[agent] ${context.id} run started (${messages.length} in history)`)
+    }
     const result = streamText({
       model: this.model,
       system: this.system,
@@ -230,6 +240,7 @@ export class Agent {
           context.recordUsage(usage)
         }
         await saveIfBound(context)
+        this.logger?.debug(`[agent] ${context.id} run finished (${stepNumber} steps)`)
       }
     }
   }
@@ -244,6 +255,9 @@ export class Agent {
    */
   async run(input?: AgentInput, options: AgentCallOptions = {}): Promise<AgentRunResult> {
     const { context, messages } = this.conversation(input)
+    if (context !== undefined) {
+      this.logger?.debug(`[agent] ${context.id} run started (${messages.length} in history)`)
+    }
     const result = await generateText({
       model: this.model,
       system: this.system,
@@ -262,6 +276,7 @@ export class Agent {
         context.recordUsage(lastStep.usage)
       }
       await saveIfBound(context)
+      this.logger?.debug(`[agent] ${context.id} run finished (${result.steps.length} steps)`)
     }
 
     const runResult: AgentRunResult = {

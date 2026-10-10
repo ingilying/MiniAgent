@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Writable } from 'node:stream'
 
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -8,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Agent, type AgentEvent, type AgentInput } from '../src/agent.js'
 import { Context } from '../src/context.js'
+import { Logger, StreamSink } from '../src/logger.js'
 import { writeTool } from '../src/tools/write.js'
 
 const usage = {
@@ -302,6 +304,34 @@ describe('Agent with Context', () => {
     await agent.run(context)
 
     expect(context.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
+  })
+
+  it('logs run boundaries at debug level', async () => {
+    let buffer = ''
+    const output = new Writable({
+      write(chunk, _encoding, callback) {
+        buffer += String(chunk)
+        callback()
+      },
+    })
+    const model = new MockLanguageModelV4({
+      doGenerate: {
+        content: [{ type: 'text', text: 'Hello!' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage,
+        warnings: [],
+      },
+    })
+    const context = new Context().addUser('hi')
+    const agent = new Agent({
+      model,
+      logger: new Logger({ outputs: [new StreamSink(output, 'test')], level: 'debug' }),
+    })
+
+    await agent.run(context)
+
+    expect(buffer).toContain(`[agent] ${context.id} run started (1 in history)`)
+    expect(buffer).toContain(`[agent] ${context.id} run finished (1 steps)`)
   })
 
   it('uses the member context when called without an input', async () => {
