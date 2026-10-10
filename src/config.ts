@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises'
 
+import { z } from 'zod'
+
 /**
  * Application configuration read from `<dataDirectory>/config.json`.
  *
@@ -77,89 +79,63 @@ export async function loadConfig(path: string): Promise<AppConfig> {
     throw new Error(`invalid JSON in ${path}`)
   }
 
-  return toConfig(parsed)
+  const result = appConfigSchema.safeParse(parsed)
+  return result.success ? result.data : {}
 }
 
-function toConfig(value: unknown): AppConfig {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return {}
-  }
+const nonEmptyText = z.string().min(1)
 
-  const record = value as Record<string, unknown>
-  return {
-    provider: toText(record.provider),
-    model: toText(record.model),
-    providers: toProviders(record.providers),
-    plugins: toPlugins(record.plugins),
-    tools: toTools(record.tools),
-    pluginConfig: toPluginConfig(record.pluginConfig),
-  }
+const providerConfigSchema = z
+  .object({
+    baseURL: nonEmptyText.optional(),
+    apiKey: nonEmptyText.optional(),
+  })
+  .refine((entry) => entry.baseURL !== undefined || entry.apiKey !== undefined)
+
+const toolConfigSchema = z.object({
+  enabled: z.boolean(),
+})
+
+/** One bad entry skips itself instead of failing the whole block. */
+function lenientRecord<T>(entrySchema: z.ZodType<T>): z.ZodType<Record<string, T>> {
+  return z
+    .record(z.string(), z.unknown())
+    .refine((record) => !Array.isArray(record))
+    .transform((record) => {
+      const kept: Record<string, T> = {}
+      for (const [key, entry] of Object.entries(record)) {
+        const parsed = entrySchema.safeParse(entry)
+        if (parsed.success) {
+          kept[key] = parsed.data
+        }
+      }
+      return kept
+    })
 }
 
-function toProviders(value: unknown): Record<string, ProviderConfig> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined
-  }
-
-  const providers: Record<string, ProviderConfig> = Object.create(null)
-  for (const [id, entry] of Object.entries(value)) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      continue
-    }
-    const record = entry as Record<string, unknown>
-    const baseURL = toText(record.baseURL)
-    const apiKey = toText(record.apiKey)
-    if (baseURL !== undefined || apiKey !== undefined) {
-      providers[id] = { baseURL, apiKey }
-    }
-  }
-  return Object.keys(providers).length === 0 ? undefined : providers
-}
-
-function toText(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-function toPlugins(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined
-  }
-  const plugins = value.filter(
-    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
-  )
-  return plugins.length === 0 ? undefined : plugins
-}
-
-function toTools(value: unknown): Record<string, ToolConfig> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined
-  }
-
-  const tools: Record<string, ToolConfig> = Object.create(null)
-  for (const [name, entry] of Object.entries(value)) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-      continue
-    }
-    const record = entry as Record<string, unknown>
-    if (typeof record.enabled !== 'boolean') {
-      continue
-    }
-    tools[name] = { enabled: record.enabled }
-  }
-  return Object.keys(tools).length === 0 ? undefined : tools
-}
-
-function toPluginConfig(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return undefined
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-  if (entries.length === 0) {
-    return undefined
-  }
-  const pluginConfig: Record<string, unknown> = Object.create(null)
-  for (const [name, entry] of entries) {
-    pluginConfig[name] = entry
-  }
-  return pluginConfig
-}
+const appConfigSchema = z.object({
+  provider: nonEmptyText.optional().catch(undefined),
+  model: nonEmptyText.optional().catch(undefined),
+  providers: lenientRecord(providerConfigSchema)
+    .refine((providers) => Object.keys(providers).length > 0)
+    .optional()
+    .catch(undefined),
+  plugins: z
+    .array(z.unknown())
+    .transform((entries) =>
+      entries.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0),
+    )
+    .refine((plugins) => plugins.length > 0)
+    .optional()
+    .catch(undefined),
+  tools: lenientRecord(toolConfigSchema)
+    .refine((tools) => Object.keys(tools).length > 0)
+    .optional()
+    .catch(undefined),
+  pluginConfig: z
+    .record(z.string(), z.unknown())
+    .refine((record) => !Array.isArray(record))
+    .refine((config) => Object.keys(config).length > 0)
+    .optional()
+    .catch(undefined),
+})

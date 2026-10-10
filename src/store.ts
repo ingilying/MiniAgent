@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { ModelMessage } from 'ai'
+import { z } from 'zod'
 
 /**
  * Token usage reported by the model provider for one response.
@@ -88,33 +89,32 @@ function toSnapshot(stored: unknown): ContextSnapshot {
   if (Array.isArray(stored)) {
     return { messages: stored as ModelMessage[] }
   }
-  const snapshot = stored as Partial<ContextSnapshot> | null
+  const result = contextSnapshotSchema.safeParse(stored)
+  if (!result.success) {
+    return { messages: [] }
+  }
   return {
-    messages: snapshot?.messages ?? [],
-    usage: toUsage(snapshot?.usage),
-    providerId: toText(snapshot?.providerId),
-    modelId: toText(snapshot?.modelId),
+    messages: result.data.messages as ModelMessage[],
+    usage: result.data.usage,
+    providerId: result.data.providerId,
+    modelId: result.data.modelId,
   }
 }
 
-function toText(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-/**
- * Normalizes stored usage, filling cache numbers missing from older files.
- */
-function toUsage(stored: Partial<ContextUsage> | undefined): ContextUsage | undefined {
-  if (stored === undefined || typeof stored.inputTokens !== 'number') {
-    return undefined
-  }
-  return {
-    inputTokens: stored.inputTokens,
-    outputTokens: stored.outputTokens ?? 0,
-    cacheReadTokens: stored.cacheReadTokens ?? 0,
-    cacheWriteTokens: stored.cacheWriteTokens ?? 0,
-  }
-}
+const contextSnapshotSchema = z.object({
+  messages: z.array(z.unknown()).catch([]),
+  usage: z
+    .object({
+      inputTokens: z.number(),
+      outputTokens: z.number().catch(0),
+      cacheReadTokens: z.number().catch(0),
+      cacheWriteTokens: z.number().catch(0),
+    })
+    .optional()
+    .catch(undefined),
+  providerId: z.string().min(1).optional().catch(undefined),
+  modelId: z.string().min(1).optional().catch(undefined),
+})
 
 /**
  * Maps a context id to a safe file name, so ids cannot escape the directory.

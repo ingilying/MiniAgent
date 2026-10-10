@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { z } from 'zod'
+
 import type { Plugin } from './types.js'
 
 /**
@@ -97,18 +99,22 @@ function readPackageEntry(root: string): string | undefined {
     return undefined
   }
   try {
-    const pkg = JSON.parse(readFileSync(file, 'utf8')) as { exports?: unknown; main?: unknown }
-    if (typeof pkg.exports === 'string') {
-      return pkg.exports
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    const result = packageEntrySchema.safeParse(parsed)
+    if (!result.success) {
+      return undefined
     }
-    if (typeof pkg.main === 'string') {
-      return pkg.main
-    }
+    return result.data.exports ?? result.data.main
   } catch {
     // A broken package.json surfaces as a load failure below.
   }
   return undefined
 }
+
+const packageEntrySchema = z.object({
+  exports: z.string().optional().catch(undefined),
+  main: z.string().optional().catch(undefined),
+})
 
 function hasFileExtension(path: string): boolean {
   return /\.[a-z0-9]+$/i.test(path)

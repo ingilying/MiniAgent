@@ -1,6 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
+import { z } from 'zod'
+
 /**
  * Model limits from the models.dev catalog.
  *
@@ -22,15 +24,31 @@ export const DEFAULT_MODEL_CATALOG_URL = 'https://models.dev/api.json'
 
 const CACHE_TTL_MS = 60 * 60 * 1000
 
-interface CatalogModel {
-  limit?: {
-    context?: unknown
-    input?: unknown
-    output?: unknown
-  }
-}
+const catalogModelSchema = z.object({
+  limit: z
+    .object({
+      context: z.unknown().optional(),
+      input: z.unknown().optional(),
+      output: z.unknown().optional(),
+    })
+    .optional()
+    .catch(undefined),
+})
 
-type Catalog = Record<string, { models?: Record<string, CatalogModel> } | undefined>
+const catalogSchema = z
+  .record(
+    z.string(),
+    z
+      .object({
+        models: z.record(z.string(), catalogModelSchema).optional().catch(undefined),
+      })
+      .catch({}),
+  )
+  .catch({})
+
+type CatalogModel = z.infer<typeof catalogModelSchema>
+
+type Catalog = z.infer<typeof catalogSchema>
 
 export interface FetchModelLimitsOptions {
   /** Catalog URL. Defaults to models.dev. */
@@ -52,6 +70,12 @@ interface CacheEntry {
   at: number
   catalog: Catalog
 }
+
+const cacheEntrySchema = z.object({
+  url: z.string(),
+  at: z.number().finite(),
+  catalog: z.unknown(),
+})
 
 let memoryCache: CacheEntry | undefined
 
@@ -107,10 +131,7 @@ async function loadCatalog(url: string, options: FetchModelLimitsOptions): Promi
 }
 
 function toCatalog(body: unknown): Catalog {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    return {}
-  }
-  return body as Catalog
+  return catalogSchema.parse(body)
 }
 
 function findModel(
@@ -147,11 +168,12 @@ async function readCache(
   }
 
   try {
-    const parsed = JSON.parse(await readFile(cacheFile, 'utf8')) as Partial<CacheEntry>
-    if (parsed.url !== url || typeof parsed.at !== 'number' || now - parsed.at >= CACHE_TTL_MS) {
+    const parsed: unknown = JSON.parse(await readFile(cacheFile, 'utf8'))
+    const result = cacheEntrySchema.safeParse(parsed)
+    if (!result.success || result.data.url !== url || now - result.data.at >= CACHE_TTL_MS) {
       return undefined
     }
-    return { url, at: parsed.at, catalog: toCatalog(parsed.catalog) }
+    return { url, at: result.data.at, catalog: toCatalog(result.data.catalog) }
   } catch {
     // A missing or unreadable cache is not an error.
     return undefined
