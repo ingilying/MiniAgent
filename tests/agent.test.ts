@@ -1,15 +1,29 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Agent, type AgentEvent, type AgentInput } from '../src/agent.js'
 import { Context } from '../src/context.js'
-import { calculatorTool } from '../src/tools/calculator.js'
+import { writeTool } from '../src/tools/write.js'
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 5, text: 5, reasoning: undefined },
 }
+
+let directory: string
+
+beforeEach(async () => {
+  directory = await mkdtemp(join(tmpdir(), 'miniagent-agent-'))
+})
+
+afterEach(async () => {
+  await rm(directory, { recursive: true, force: true })
+})
 
 async function collectEvents(agent: Agent, input: AgentInput): Promise<AgentEvent[]> {
   const events: AgentEvent[] = []
@@ -51,6 +65,7 @@ describe('Agent', () => {
   })
 
   it('executes tools between streamed steps', async () => {
+    const file = join(directory, 'note.txt')
     const model = new MockLanguageModelV4({
       doStream: [
         {
@@ -60,8 +75,8 @@ describe('Agent', () => {
               {
                 type: 'tool-call',
                 toolCallId: 'call-1',
-                toolName: 'calculator',
-                input: '{"expression":"2 + 3 * 4"}',
+                toolName: 'write',
+                input: JSON.stringify({ path: file, content: 'hello' }),
               },
               { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: undefined } },
             ],
@@ -72,7 +87,7 @@ describe('Agent', () => {
             chunks: [
               { type: 'stream-start', warnings: [] },
               { type: 'text-start', id: 'text-1' },
-              { type: 'text-delta', id: 'text-1', delta: 'It is 14.' },
+              { type: 'text-delta', id: 'text-1', delta: 'Wrote it.' },
               { type: 'text-end', id: 'text-1' },
               { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
             ],
@@ -81,24 +96,25 @@ describe('Agent', () => {
       ],
     })
 
-    const agent = new Agent({ model, tools: { calculator: calculatorTool }, maxSteps: 4 })
-    const events = await collectEvents(agent, 'calculate 2 + 3 * 4')
+    const agent = new Agent({ model, tools: { write: writeTool }, maxSteps: 4 })
+    const events = await collectEvents(agent, 'write hello to a note')
 
     expect(events.find((event) => event.type === 'tool-call')).toMatchObject({
       toolCallId: 'call-1',
-      toolName: 'calculator',
-      input: { expression: '2 + 3 * 4' },
+      toolName: 'write',
+      input: { path: file, content: 'hello' },
     })
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
       toolCallId: 'call-1',
-      toolName: 'calculator',
-      output: { result: 14 },
+      toolName: 'write',
+      output: { path: file, bytes: 5 },
     })
-    expect(textOf(events)).toBe('It is 14.')
+    expect(textOf(events)).toBe('Wrote it.')
     expect(model.doStreamCalls).toHaveLength(2)
   })
 
   it('runs tool calls to completion without streaming', async () => {
+    const file = join(directory, 'note.txt')
     const model = new MockLanguageModelV4({
       doGenerate: [
         {
@@ -106,8 +122,8 @@ describe('Agent', () => {
             {
               type: 'tool-call',
               toolCallId: 'call-1',
-              toolName: 'calculator',
-              input: '{"expression":"10 / 4"}',
+              toolName: 'write',
+              input: JSON.stringify({ path: file, content: 'hello' }),
             },
           ],
           finishReason: { unified: 'tool-calls', raw: undefined },
@@ -115,7 +131,7 @@ describe('Agent', () => {
           warnings: [],
         },
         {
-          content: [{ type: 'text', text: '10 divided by 4 is 2.5.' }],
+          content: [{ type: 'text', text: 'Wrote it.' }],
           finishReason: { unified: 'stop', raw: undefined },
           usage,
           warnings: [],
@@ -123,13 +139,13 @@ describe('Agent', () => {
       ],
     })
 
-    const agent = new Agent({ model, tools: { calculator: calculatorTool } })
-    const result = await agent.run('divide 10 by 4')
+    const agent = new Agent({ model, tools: { write: writeTool } })
+    const result = await agent.run('write hello to a note')
 
-    expect(result.text).toBe('10 divided by 4 is 2.5.')
+    expect(result.text).toBe('Wrote it.')
     expect(result.toolResults[0]).toMatchObject({
-      toolName: 'calculator',
-      output: { expression: '10 / 4', result: 2.5 },
+      toolName: 'write',
+      output: { path: file, bytes: 5 },
     })
     expect(result.responseMessages.length).toBeGreaterThan(0)
     expect(model.doGenerateCalls).toHaveLength(2)
@@ -138,6 +154,7 @@ describe('Agent', () => {
 
 describe('Agent with Context', () => {
   it('saves the conversation history across streamed runs', async () => {
+    const file = join(directory, 'note.txt')
     const model = new MockLanguageModelV4({
       doStream: [
         // turn 1, step 1: tool call
@@ -148,8 +165,8 @@ describe('Agent with Context', () => {
               {
                 type: 'tool-call',
                 toolCallId: 'call-1',
-                toolName: 'calculator',
-                input: '{"expression":"2 + 3 * 4"}',
+                toolName: 'write',
+                input: JSON.stringify({ path: file, content: 'hello' }),
               },
               { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: undefined } },
             ],
@@ -161,7 +178,7 @@ describe('Agent with Context', () => {
             chunks: [
               { type: 'stream-start', warnings: [] },
               { type: 'text-start', id: 'text-1' },
-              { type: 'text-delta', id: 'text-1', delta: 'It is 14.' },
+              { type: 'text-delta', id: 'text-1', delta: 'Wrote it.' },
               { type: 'text-end', id: 'text-1' },
               { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
             ],
@@ -182,8 +199,8 @@ describe('Agent with Context', () => {
       ],
     })
 
-    const agent = new Agent({ model, tools: { calculator: calculatorTool } })
-    const context = new Context().addUser('calculate 2 + 3 * 4')
+    const agent = new Agent({ model, tools: { write: writeTool } })
+    const context = new Context().addUser('write hello to a note')
 
     await collectEvents(agent, context)
 

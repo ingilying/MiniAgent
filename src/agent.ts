@@ -216,16 +216,16 @@ export class Agent {
     }
 
     if (context !== undefined) {
-      let messages: ModelMessage[] | undefined
+      let responseMessages: ModelMessage[] | undefined
       let usage: LanguageModelUsage | undefined
       try {
-        messages = await result.responseMessages
+        responseMessages = await result.responseMessages
         usage = (await result.steps).at(-1)?.usage
       } catch {
         // The run failed; its error was already yielded as an 'error' event.
       }
-      if (messages !== undefined) {
-        context.append(messages)
+      if (responseMessages !== undefined) {
+        context.append(responseMessages)
         if (usage !== undefined) {
           context.recordUsage(usage)
         }
@@ -264,7 +264,7 @@ export class Agent {
       await saveIfBound(context)
     }
 
-    return {
+    const runResult: AgentRunResult = {
       text: result.text,
       finishReason: result.finishReason,
       usage: result.usage,
@@ -273,6 +273,7 @@ export class Agent {
       toolResults: result.toolResults,
       responseMessages: result.responseMessages,
     }
+    return runResult
   }
 
   /**

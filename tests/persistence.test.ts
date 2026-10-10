@@ -146,6 +146,18 @@ describe('Context persistence', () => {
     expect(reloaded.messageCount).toBe(3)
   })
 
+  it('generates an id when loading without one', async () => {
+    const store = new FileContextStore(directory)
+
+    const first = await Context.load(store)
+    const second = await Context.load(store)
+
+    expect(first.id).not.toHaveLength(0)
+    expect(first.id).not.toBe(second.id)
+    expect(first.store).toBe(store)
+    expect(first.messageCount).toBe(0)
+  })
+
   it('persists the usage reported by the provider', async () => {
     const store = new FileContextStore(directory)
     const context = new Context([], { store, id: 'session-1' }).addUser('hello')

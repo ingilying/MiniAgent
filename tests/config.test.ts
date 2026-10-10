@@ -99,6 +99,34 @@ describe('loadConfig', () => {
     })
   })
 
+  it('reads plugins, tools, and pluginConfig', async () => {
+    await writeFile(
+      configPath(),
+      JSON.stringify({
+        plugins: ['./plugins/my-tools.js', 'miniagent-plugin-foo', '', 7],
+        tools: { read: { enabled: false }, other: { enabled: true }, bad: 7 },
+        pluginConfig: { 'my-tools': { verbose: true } },
+      }),
+      'utf8',
+    )
+
+    expect(await loadConfig(configPath())).toEqual({
+      plugins: ['./plugins/my-tools.js', 'miniagent-plugin-foo'],
+      tools: { read: { enabled: false }, other: { enabled: true } },
+      pluginConfig: { 'my-tools': { verbose: true } },
+    })
+  })
+
+  it('drops empty plugin, tool, and pluginConfig blocks', async () => {
+    await writeFile(
+      configPath(),
+      JSON.stringify({ plugins: [], tools: {}, pluginConfig: {} }),
+      'utf8',
+    )
+
+    expect(await loadConfig(configPath())).toEqual({})
+  })
+
   it('ignores a non-object document', async () => {
     await writeFile(configPath(), JSON.stringify(['nope']), 'utf8')
 

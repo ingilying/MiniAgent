@@ -124,7 +124,8 @@ describe('App', () => {
     expect(app.agent).toBe(agent)
     expect(app.providerId).toBe('openai')
     expect(app.modelId).toBe('gpt-6-astra')
-    expect(app.session).toBe('default')
+    expect(app.sessionId).toBeDefined()
+    expect(app.sessionId).toBe(app.context?.id)
     expect(app.prompt).toBe('what is 17 * 23?')
     expect(app.context?.contextWindow).toBe(1000)
     expect(catalog).not.toHaveBeenCalled()
@@ -152,8 +153,29 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(app.modelId).toBe('gpt-5-nova')
-    expect(app.session).toBe('work')
+    expect(app.sessionId).toBe('work')
+    expect(app.context?.id).toBe('work')
     expect(app.prompt).toBeUndefined()
+  })
+
+  it('generates a session id when none is given', async () => {
+    const app = new App({
+      args: [],
+      env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
+      envFile: false,
+      configFile: false,
+      dataDirectory: directory,
+      output: sink().stream,
+      errorOutput: sink().stream,
+      agent: textAgent('hi'),
+    })
+
+    const code = await app.run()
+
+    expect(code).toBe(0)
+    expect(app.sessionId).toBeDefined()
+    expect(app.sessionId).toBe(app.context?.id)
+    expect(app.sessionId).not.toHaveLength(0)
   })
 
   it('builds an agent from the provider when none is injected', async () => {
@@ -454,7 +476,11 @@ describe('App config file', () => {
 
     const instance = app({
       configFile,
-      env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
+      env: {
+        OPENAI_API_KEY: 'test',
+        MINIAGENT_CONTEXT_WINDOW: '1000',
+        MINIAGENT_SESSION: 'default',
+      },
     })
     await instance.run()
 

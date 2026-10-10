@@ -332,13 +332,17 @@ export class Context {
 
   /**
    * Load a context from a store. Returns an empty, store-bound context when
-   * nothing has been stored for the id yet.
+   * nothing has been stored for the id yet. When no id is given, returns a
+   * fresh context with a generated id (nothing is loaded).
    */
   static async load(
     store: ContextStore,
-    id: string,
+    id?: string,
     options: Omit<ContextOptions, 'store' | 'id'> = {},
   ): Promise<Context> {
+    if (id === undefined) {
+      return new Context([], { ...options, store })
+    }
     const snapshot = await store.load(id)
     const context = new Context(snapshot?.messages ?? [], {
       ...options,

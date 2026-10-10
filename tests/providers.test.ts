@@ -3,7 +3,7 @@ import type { Provider } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { deepseekProvider } from '../src/deepseek.js'
+import { deepseekProvider } from '../src/plugins/deepseek.js'
 import { loadProviders } from '../src/providers.js'
 
 const BUILT_IN_IDS = ['openai', 'anthropic', 'google']

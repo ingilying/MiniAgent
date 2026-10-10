@@ -1,67 +1,137 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
-import { calculatorTool, evaluateExpression } from '../src/tools/calculator.js'
-import { getCurrentTimeTool } from '../src/tools/current-time.js'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { editTool } from '../src/tools/edit.js'
+import { readTool } from '../src/tools/read.js'
+import { shellTool } from '../src/tools/shell.js'
+import { writeTool } from '../src/tools/write.js'
 
 const toolExecutionOptions = { toolCallId: 'test', messages: [], context: {} }
 
-describe('evaluateExpression', () => {
-  it('respects operator precedence', () => {
-    expect(evaluateExpression('2 + 3 * 4')).toBe(14)
-    expect(evaluateExpression('(1 + 2) * (3 + 4)')).toBe(21)
-    expect(evaluateExpression('2 * 3 + 4')).toBe(10)
-  })
+let directory: string
 
-  it('supports powers and unary signs', () => {
-    expect(evaluateExpression('2 ^ 10')).toBe(1024)
-    expect(evaluateExpression('2 ^ 3 ^ 2')).toBe(512)
-    expect(evaluateExpression('-5 + 10')).toBe(5)
-    expect(evaluateExpression('2 * -3')).toBe(-6)
-  })
-
-  it('supports modulo and division', () => {
-    expect(evaluateExpression('10 % 3')).toBe(1)
-    expect(evaluateExpression('10 / 4')).toBe(2.5)
-  })
-
-  it('rejects invalid expressions', () => {
-    expect(() => evaluateExpression('1 +')).toThrow()
-    expect(() => evaluateExpression('foo')).toThrow()
-    expect(() => evaluateExpression('(1 + 2')).toThrow()
-    expect(() => evaluateExpression('1 2')).toThrow()
-    expect(() => evaluateExpression('10 / 0')).not.toThrow()
-  })
+beforeEach(async () => {
+  directory = await mkdtemp(join(tmpdir(), 'miniagent-tools-'))
 })
 
-describe('calculatorTool', () => {
-  it('evaluates expressions', async () => {
-    const output = await calculatorTool.execute({ expression: '6 * 7' }, toolExecutionOptions)
-    expect(output).toEqual({ expression: '6 * 7', result: 42 })
+afterEach(async () => {
+  await rm(directory, { recursive: true, force: true })
+})
+
+describe('readTool', () => {
+  it('reads a whole file', async () => {
+    const path = join(directory, 'note.txt')
+    await writeFile(path, 'one\ntwo\nthree', 'utf8')
+
+    const output = await readTool.execute({ path }, toolExecutionOptions)
+
+    expect(output).toEqual({ path, content: 'one\ntwo\nthree', lines: 3 })
   })
 
-  it('throws on non-finite results', async () => {
+  it('reads a line slice', async () => {
+    const path = join(directory, 'note.txt')
+    await writeFile(path, 'one\ntwo\nthree', 'utf8')
+
+    const output = await readTool.execute({ path, offset: 2, limit: 1 }, toolExecutionOptions)
+
+    expect(output).toEqual({ path, content: 'two', lines: 3 })
+  })
+
+  it('throws for a missing file', async () => {
     await expect(
-      calculatorTool.execute({ expression: '10 / 0' }, toolExecutionOptions),
-    ).rejects.toThrow(/finite/)
+      readTool.execute({ path: join(directory, 'missing.txt') }, toolExecutionOptions),
+    ).rejects.toThrow()
   })
 })
 
-describe('getCurrentTimeTool', () => {
-  it('returns the time for a given time zone', async () => {
-    const output = (await getCurrentTimeTool.execute(
-      { timeZone: 'Asia/Seoul' },
+describe('writeTool', () => {
+  it('writes a file and creates parent directories', async () => {
+    const path = join(directory, 'sub', 'note.txt')
+
+    const output = await writeTool.execute({ path, content: 'hi' }, toolExecutionOptions)
+
+    expect(output).toEqual({ path, bytes: 2 })
+    await expect(readTool.execute({ path }, toolExecutionOptions)).resolves.toMatchObject({
+      content: 'hi',
+    })
+  })
+})
+
+describe('editTool', () => {
+  it('replaces exact text once', async () => {
+    const path = join(directory, 'note.txt')
+    await writeFile(path, 'hello world', 'utf8')
+
+    const output = await editTool.execute(
+      { path, oldString: 'world', newString: 'there' },
       toolExecutionOptions,
-    )) as { iso: string; timeZone: string; formatted: string }
+    )
 
-    expect(output.timeZone).toBe('Asia/Seoul')
-    expect(typeof output.iso).toBe('string')
-    expect(typeof output.formatted).toBe('string')
-    expect(new Date(output.iso).toString()).not.toBe('Invalid Date')
+    expect(output).toEqual({ path, replacements: 1 })
+    await expect(readTool.execute({ path }, toolExecutionOptions)).resolves.toMatchObject({
+      content: 'hello there',
+    })
   })
 
-  it('rejects unknown time zones', async () => {
+  it('throws when the text is missing', async () => {
+    const path = join(directory, 'note.txt')
+    await writeFile(path, 'hello', 'utf8')
+
     await expect(
-      getCurrentTimeTool.execute({ timeZone: 'Mars/Olympus' }, toolExecutionOptions),
-    ).rejects.toThrow(/Unknown IANA time zone/)
+      editTool.execute({ path, oldString: 'bye', newString: 'x' }, toolExecutionOptions),
+    ).rejects.toThrow(/not found/)
+  })
+
+  it('throws on multiple matches without replaceAll', async () => {
+    const path = join(directory, 'note.txt')
+    await writeFile(path, 'a a a', 'utf8')
+
+    await expect(
+      editTool.execute({ path, oldString: 'a', newString: 'b' }, toolExecutionOptions),
+    ).rejects.toThrow(/3 times/)
+  })
+
+  it('replaces all with replaceAll', async () => {
+    const path = join(directory, 'note.txt')
+    await writeFile(path, 'a a a', 'utf8')
+
+    const output = await editTool.execute(
+      { path, oldString: 'a', newString: 'b', replaceAll: true },
+      toolExecutionOptions,
+    )
+
+    expect(output).toEqual({ path, replacements: 3 })
+  })
+})
+
+describe('shellTool', () => {
+  it('returns output and exit code', async () => {
+    const output = await shellTool.execute(
+      { command: 'echo hello', workdir: directory },
+      toolExecutionOptions,
+    )
+
+    expect(output).toMatchObject({ exitCode: 0, stdout: 'hello\n' })
+  })
+
+  it('returns non-zero exit codes instead of throwing', async () => {
+    const output = await shellTool.execute(
+      { command: 'exit 3', workdir: directory },
+      toolExecutionOptions,
+    )
+
+    expect(output).toMatchObject({ exitCode: 3 })
+  })
+
+  it('throws on timeout', async () => {
+    await expect(
+      shellTool.execute(
+        { command: 'sleep 5', workdir: directory, timeout: 1 },
+        toolExecutionOptions,
+      ),
+    ).rejects.toThrow(/timed out/)
   })
 })

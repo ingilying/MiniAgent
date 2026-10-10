@@ -11,7 +11,10 @@ import { readFile } from 'node:fs/promises'
  *     "ollama": { "baseURL": "http://localhost:11434/v1" },
  *     "openai": { "baseURL": "https://proxy.example.com/v1", "apiKey": "sk-..." },
  *     "deepseek": { "apiKey": "sk-..." }
- *   }
+ *   },
+ *   "plugins": ["./plugins/my-tools.js"],
+ *   "tools": { "read": { "enabled": false } },
+ *   "pluginConfig": { "my-tools": { "verbose": true } }
  * }
  * ```
  *
@@ -26,6 +29,18 @@ export interface AppConfig {
   readonly model?: string
   /** Per-provider settings keyed by provider id. */
   readonly providers?: Readonly<Record<string, ProviderConfig>>
+  /** Plugin specifiers loaded in order: paths relative to the data directory or package names. */
+  readonly plugins?: readonly string[]
+  /** Per-tool settings keyed by tool name. */
+  readonly tools?: Readonly<Record<string, ToolConfig>>
+  /** Per-plugin settings keyed by plugin name, passed to the plugin's hooks as-is. */
+  readonly pluginConfig?: Readonly<Record<string, unknown>>
+}
+
+/** Settings for one tool: whether it stays enabled after plugins merge. */
+export interface ToolConfig {
+  /** Set to `false` to remove the tool from the agent. Defaults to enabled. */
+  readonly enabled?: boolean
 }
 
 /** Settings for one provider: a custom endpoint and an inline API key. */
@@ -75,6 +90,9 @@ function toConfig(value: unknown): AppConfig {
     provider: toText(record.provider),
     model: toText(record.model),
     providers: toProviders(record.providers),
+    plugins: toPlugins(record.plugins),
+    tools: toTools(record.tools),
+    pluginConfig: toPluginConfig(record.pluginConfig),
   }
 }
 
@@ -100,4 +118,48 @@ function toProviders(value: unknown): Record<string, ProviderConfig> | undefined
 
 function toText(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function toPlugins(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+  const plugins = value.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.length > 0,
+  )
+  return plugins.length === 0 ? undefined : plugins
+}
+
+function toTools(value: unknown): Record<string, ToolConfig> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined
+  }
+
+  const tools: Record<string, ToolConfig> = Object.create(null)
+  for (const [name, entry] of Object.entries(value)) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      continue
+    }
+    const record = entry as Record<string, unknown>
+    if (typeof record.enabled !== 'boolean') {
+      continue
+    }
+    tools[name] = { enabled: record.enabled }
+  }
+  return Object.keys(tools).length === 0 ? undefined : tools
+}
+
+function toPluginConfig(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length === 0) {
+    return undefined
+  }
+  const pluginConfig: Record<string, unknown> = Object.create(null)
+  for (const [name, entry] of entries) {
+    pluginConfig[name] = entry
+  }
+  return pluginConfig
 }
