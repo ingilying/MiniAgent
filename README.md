@@ -41,7 +41,14 @@ OPENAI_MODEL=gpt-6-astra
 MINIAGENT_SESSION=default
 # optional, overrides the context window read from the model catalog
 MINIAGENT_CONTEXT_WINDOW=128000
+# optional, appends diagnostics to a file instead of stdout/stderr
+MINIAGENT_LOG_FILE=.miniagent/miniagent.log
+# optional, quietest log level emitted (debug, info, warn, error)
+MINIAGENT_LOG_LEVEL=info
 ```
+
+Without `MINIAGENT_LOG_FILE` (or `--log-file`), diagnostics tee to the
+console and `<dataDirectory>/latest.log`, restarted on every run.
 
 For a fresh session the config file wins over the environment: provider =
 `config.provider` else `openai`; model = `config.model` else `OPENAI_MODEL` else
@@ -64,8 +71,10 @@ the app with the resulting prompt:
 miniagent [options] [prompt]
 
 Options:
-  -v, --version  output the version number
-  -h, --help     display help for command
+  -v, --version       output the version number
+  --log-file <path>   append diagnostics to a file instead of stdout/stderr
+  --log-level <level> quietest log level to emit (debug, info, warn, error)
+  -h, --help          display help for command
 ```
 
 `-v` / `--version` prints the build version and exits without loading any
@@ -93,6 +102,8 @@ app.providerId // provider id the session runs on
 app.modelId // model id the session runs on
 app.context // the session's Context, window resolved
 app.agent // the built Agent (or the injected one), bound to app.context
+app.agentFor(context) // builds an Agent for any session on its own model
+app.agents // per-session agent registry; plugins drive agents directly
 app.dataDirectory // .miniagent, or $HOME/.config/miniagent in a release build
 app.version // version stamped into this build
 ```
@@ -418,10 +429,12 @@ pnpm test
 ├── src/
 │   ├── app.ts             # config load + agent construction
 │   ├── agent.ts           # Agent class (stream + run + tool loop)
+│   ├── agents.ts          # AgentsManager (one cached agent per session)
 │   ├── build-info.ts      # generated release sign + version (gitignored)
 │   ├── cli.ts             # command line (commander): version, help, prompt
 │   ├── config.ts          # config.json (provider, model, api keys)
 │   ├── context.ts         # Context class (history, persistence, tokens)
+│   ├── logger.ts          # Logger class (multi-sink diagnostics: console, file)
 │   ├── model-info.ts      # model limits from the models.dev catalog
 │   ├── plugins/           # plugin contract + loader + built-in plugins
 │   │   ├── types.ts
