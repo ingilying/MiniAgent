@@ -200,6 +200,34 @@ describe('SessionManager', () => {
     await manager.shutdown()
   })
 
+  it('recovers from a corrupt history with a warning and a fresh session', async () => {
+    const err = sink()
+    const manager = await SessionManager.create({
+      store: new FileContextStore(join(dataDirectory, 'contexts')),
+      dataDirectory,
+      cwd: projectA,
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
+      logger: pino({ level: 'debug', base: undefined }, err.stream),
+    })
+    await mkdir(join(dataDirectory, 'contexts'), { recursive: true })
+    await writeFile(join(dataDirectory, 'contexts', 'broken.json'), '{ nope', 'utf8')
+
+    const resumed = await manager.resume('broken')
+
+    expect(resumed.id).toBe('broken')
+    expect(resumed.messageCount).toBe(0)
+    const logged = err
+      .text()
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => (JSON.parse(line) as { msg: string }).msg)
+    expect(logged.join('\n')).toContain('quarantined corrupt history for "broken"')
+    const files = await contextFiles()
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^broken\.json\.corrupt-\d+\.json$/)
+    await manager.shutdown()
+  })
+
   it('logs session lifecycle at debug level', async () => {
     const out = sink()
     const manager = await SessionManager.create({

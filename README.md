@@ -257,6 +257,9 @@ console.log(resumed.messageCount) // history is back
   the last reported usage, and the provider and model the session runs on),
   atomically (temp file + rename), and sanitizes ids so they cannot escape the
   directory.
+- A history file that exists but cannot be read is quarantined aside
+  (`<id>.json.corrupt-<timestamp>`) instead of loading as empty, and the
+  session starts fresh with a warning. Missing files still mean empty.
 - `Context.load()` prefers the stored provider and model; it only falls back to
   the passed options for a fresh or legacy file. That is how a restored session
   keeps working after the config file changes.

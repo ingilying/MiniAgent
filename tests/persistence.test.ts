@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Agent, type AgentEvent } from '../src/agent.js'
 import { Context } from '../src/context.js'
-import { FileContextStore } from '../src/store.js'
+import { CorruptSnapshotError, FileContextStore } from '../src/store.js'
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
@@ -97,6 +97,33 @@ describe('FileContextStore', () => {
     expect(files).toHaveLength(1)
     expect(files[0]).toMatch(/\.json$/)
     expect((await store.load(id))?.messages).toHaveLength(1)
+  })
+
+  it('quarantines corrupt files instead of loading them as empty', async () => {
+    const store = new FileContextStore(directory)
+    await writeFile(join(directory, 'broken.json'), '{ not json', 'utf8')
+
+    const error = await store.load('broken').then(
+      () => undefined,
+      (cause: unknown) => cause,
+    )
+    expect(error).toBeInstanceOf(CorruptSnapshotError)
+
+    const files = await readdir(directory)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^broken\.json\.corrupt-\d+\.json$/)
+    await expect(store.load('broken')).resolves.toBeUndefined()
+  })
+
+  it('quarantines valid JSON that is not a snapshot', async () => {
+    const store = new FileContextStore(directory)
+    await writeFile(join(directory, 'odd.json'), '42', 'utf8')
+
+    await expect(store.load('odd')).rejects.toBeInstanceOf(CorruptSnapshotError)
+
+    const files = await readdir(directory)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^odd\.json\.corrupt-\d+\.json$/)
   })
 })
 

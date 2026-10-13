@@ -45,6 +45,35 @@ export interface ContextStore {
 }
 
 /**
+ * Thrown when a stored history file exists but cannot be read: it holds
+ * bytes that are neither JSON nor a known snapshot shape. The corrupt file
+ * is moved aside (see `quarantinedPath`) instead of being treated as an
+ * empty history, so the damage stays visible and no later save overwrites
+ * the evidence.
+ */
+export class CorruptSnapshotError extends Error {
+  readonly id: string
+  readonly file: string
+  readonly quarantinedPath: string | undefined
+
+  constructor(
+    id: string,
+    file: string,
+    quarantinedPath: string | undefined,
+    options?: ErrorOptions,
+  ) {
+    super(
+      `Corrupt history for "${id}" in ${file}` +
+        (quarantinedPath === undefined ? '' : ` (moved to ${quarantinedPath})`),
+      options,
+    )
+    this.name = 'CorruptSnapshotError'
+    this.id = id
+    this.file = file
+    this.quarantinedPath = quarantinedPath
+  }
+}
+/**
  * Stores each conversation as a JSON file (one file per context id) in a
  * directory. Writes are atomic (temp file + rename), so a crash mid-write
  * cannot corrupt an existing history.
@@ -53,14 +82,34 @@ export class FileContextStore implements ContextStore {
   constructor(private readonly directory: string) {}
 
   async load(id: string): Promise<ContextSnapshot | undefined> {
+    const file = this.filePath(id)
+    let raw: string
     try {
-      const raw = await readFile(this.filePath(id), 'utf8')
-      return toSnapshot(JSON.parse(raw))
+      raw = await readFile(file, 'utf8')
     } catch (error) {
       if (isNotFoundError(error)) {
         return undefined
       }
       throw error
+    }
+    let stored: unknown
+    try {
+      stored = JSON.parse(raw)
+    } catch (cause) {
+      throw await this.quarantine(id, file, cause)
+    }
+    if (Array.isArray(stored)) {
+      return { messages: stored as ModelMessage[] }
+    }
+    const result = contextSnapshotSchema.safeParse(stored)
+    if (!result.success) {
+      throw await this.quarantine(id, file, new Error('unknown snapshot shape'))
+    }
+    return {
+      messages: result.data.messages as ModelMessage[],
+      usage: result.data.usage,
+      providerId: result.data.providerId,
+      modelId: result.data.modelId,
     }
   }
 
@@ -80,24 +129,26 @@ export class FileContextStore implements ContextStore {
   private filePath(id: string): string {
     return join(this.directory, `${toFileName(id)}.json`)
   }
-}
 
-/**
- * Reads both the snapshot shape and the older bare message array.
- */
-function toSnapshot(stored: unknown): ContextSnapshot {
-  if (Array.isArray(stored)) {
-    return { messages: stored as ModelMessage[] }
-  }
-  const result = contextSnapshotSchema.safeParse(stored)
-  if (!result.success) {
-    return { messages: [] }
-  }
-  return {
-    messages: result.data.messages as ModelMessage[],
-    usage: result.data.usage,
-    providerId: result.data.providerId,
-    modelId: result.data.modelId,
+  /**
+   * Moves a corrupt history file aside so its bytes survive for inspection,
+   * then describes the failure. A move that itself fails keeps the original
+   * in place and reports both errors.
+   */
+  private async quarantine(
+    id: string,
+    file: string,
+    cause: unknown,
+  ): Promise<CorruptSnapshotError> {
+    const quarantinedPath = `${file}.corrupt-${Date.now()}.json`
+    try {
+      await rename(file, quarantinedPath)
+      return new CorruptSnapshotError(id, file, quarantinedPath, { cause })
+    } catch (moveError) {
+      return new CorruptSnapshotError(id, file, undefined, {
+        cause: new AggregateError([cause, moveError]),
+      })
+    }
   }
 }
 

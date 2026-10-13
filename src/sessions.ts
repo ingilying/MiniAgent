@@ -51,9 +51,8 @@ export interface SessionManagerOptions {
  *
  * Histories stay in the global store; the manager keeps a per-directory
  * index (`<dataDirectory>/sessions/<hash>.json`) listing the ids that belong
- * to `cwd`. Several sessions can be open at once: each `Context` is
- * independent and can drive the agent concurrently via
- * `agent.stream(context)` / `agent.run(context)`.
+ * to `cwd`. Several sessions can be open at once, each driven by its own
+ * agent (see `App.agentFor`).
  *
  * Sessions are only written to the store on `close()` / `shutdown()` and
  * only when they hold at least one message, so opening an instance never
@@ -112,10 +111,7 @@ export class SessionManager {
    * or `shutdown()`.
    */
   async createSession(): Promise<Context> {
-    const context = await Context.load(this.store, randomUUID(), {
-      ...this.contextDefaults(),
-      autoSave: false,
-    })
+    const context = await this.loadContext(randomUUID())
     await context.initRemote()
     this.open.set(context.id, context)
     this.index.touch(context.id)
@@ -134,10 +130,7 @@ export class SessionManager {
     if (known !== undefined) {
       return known
     }
-    const context = await Context.load(this.store, id, {
-      ...this.contextDefaults(),
-      autoSave: false,
-    })
+    const context = await this.loadContext(id)
     await context.initRemote()
     this.open.set(context.id, context)
     this.index.touch(context.id)
@@ -155,14 +148,21 @@ export class SessionManager {
     if (known !== undefined) {
       return known
     }
-    const snapshot = await this.store.load(id)
+    let snapshot
+    try {
+      snapshot = await this.store.load(id)
+    } catch (error) {
+      if (!(error instanceof CorruptSnapshotError)) {
+        throw error
+      }
+      // The store moved the corrupt file aside; continue with a fresh session.
+      this.warnIfCorrupt(id, error)
+      snapshot = undefined
+    }
     if (snapshot === undefined && !this.index.has(id)) {
       return undefined
     }
-    const context = await Context.load(this.store, id, {
-      ...this.contextDefaults(),
-      autoSave: false,
-    })
+    const context = await this.loadContext(id)
     await context.initRemote()
     this.open.set(context.id, context)
     this.index.touch(context.id)
@@ -227,6 +227,34 @@ export class SessionManager {
       dataDirectory: this.dataDirectory,
       onModelLine: this.onModelLine,
     }
+  }
+
+  /**
+   * Loads a store-bound context, recovering from a corrupt history file by
+   * warning and starting fresh: the store quarantines the corrupt bytes on
+   * the first read, so the retry finds nothing and returns an empty context.
+   */
+  private loadContext(id: string): Promise<Context> {
+    return Context.load(this.store, id, {
+      ...this.contextDefaults(),
+      autoSave: false,
+    }).catch((error: unknown) => {
+      if (!(error instanceof CorruptSnapshotError)) {
+        throw error
+      }
+      this.warnIfCorrupt(id, error)
+      return Context.load(this.store, id, {
+        ...this.contextDefaults(),
+        autoSave: false,
+      })
+    })
+  }
+
+  private warnIfCorrupt(id: string, error: CorruptSnapshotError): void {
+    this.logger?.warn(
+      `quarantined corrupt history for "${id}"` +
+        (error.quarantinedPath === undefined ? '' : ` at ${error.quarantinedPath}`),
+    )
   }
 }
 
