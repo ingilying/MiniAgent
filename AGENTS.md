@@ -5,6 +5,7 @@ Rules for agents that work on this project.
 ## Hard rules
 
 1. **Do not commit.** Wait until I say you can. Never commit on your own.
+   A green `pnpm check` is not permission to commit.
 2. **Read the official docs first.** If you are not sure how an SDK works, search
    the web for the vendor's own docs and read them. Do not guess an API.
 3. **Keep it simple.** Small classes that do one job. No big frameworks.
