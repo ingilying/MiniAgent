@@ -1,7 +1,28 @@
 import type { ModelMessage } from 'ai'
+import { Writable } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import pino from 'pino'
 
 import { Context } from '../src/context.js'
+
+function sink(): { stream: NodeJS.WritableStream; text: () => string } {
+  let buffer = ''
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      buffer += String(chunk)
+      callback()
+    },
+  })
+  return { stream, text: () => buffer }
+}
+
+/** Logged texts: diagnostics leave as JSON lines, so read the msg field. */
+function messages(text: string): string[] {
+  return text
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => (JSON.parse(line) as { msg: string }).msg)
+}
 
 describe('Context', () => {
   it('starts empty or with initial messages', () => {
@@ -200,7 +221,7 @@ describe('Context.initRemote', () => {
   })
 
   it('reads the context window from the catalog', async () => {
-    const lines: string[] = []
+    const out = sink()
     vi.stubGlobal(
       'fetch',
       catalogResponse({
@@ -211,14 +232,14 @@ describe('Context.initRemote', () => {
       modelId: 'gpt-6-astra',
       env: {},
       catalogUrl: 'https://example.test/context-one',
-      onModelLine: (line) => lines.push(line),
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     })
 
     await context.initRemote()
 
     expect(context.contextWindow).toBe(1_050_000)
     expect(context.remainingTokens).toBe(1_050_000)
-    expect(lines).toEqual(['[model] openai/gpt-6-astra: 1,050,000 token context window'])
+    expect(messages(out.text())).toEqual(['openai/gpt-6-astra: 1,050,000 token context window'])
   })
 
   it('returns nothing', async () => {
@@ -228,7 +249,7 @@ describe('Context.initRemote', () => {
   })
 
   it('looks the model up under the configured provider', async () => {
-    const lines: string[] = []
+    const out = sink()
     vi.stubGlobal(
       'fetch',
       catalogResponse({ xai: { models: { 'grok-4.7': { limit: { context: 256_000 } } } } }),
@@ -238,13 +259,13 @@ describe('Context.initRemote', () => {
       modelId: 'grok-4.7',
       env: {},
       catalogUrl: 'https://example.test/context-provider',
-      onModelLine: (line) => lines.push(line),
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     })
 
     await context.initRemote()
 
     expect(context.contextWindow).toBe(256_000)
-    expect(lines[0]).toBe('[model] xai/grok-4.7: 256,000 token context window')
+    expect(messages(out.text())[0]).toBe('xai/grok-4.7: 256,000 token context window')
   })
 
   it('does nothing without a model id', async () => {
@@ -284,7 +305,7 @@ describe('Context.initRemote', () => {
   })
 
   it('reports an invalid override and falls back to the catalog', async () => {
-    const lines: string[] = []
+    const out = sink()
     vi.stubGlobal(
       'fetch',
       catalogResponse({ openai: { models: { 'gpt-6-astra': { limit: { context: 512 } } } } }),
@@ -293,49 +314,49 @@ describe('Context.initRemote', () => {
       modelId: 'gpt-6-astra',
       env: { MINIAGENT_CONTEXT_WINDOW: 'nope' },
       catalogUrl: 'https://example.test/context-two',
-      onModelLine: (line) => lines.push(line),
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     })
 
     await context.initRemote()
 
     expect(context.contextWindow).toBe(512)
-    expect(lines[0]).toBe('[model] ignoring invalid MINIAGENT_CONTEXT_WINDOW="nope"')
+    expect(messages(out.text())[0]).toBe('ignoring invalid MINIAGENT_CONTEXT_WINDOW="nope"')
   })
 
   it('stays without a window when the catalog is unavailable', async () => {
-    const lines: string[] = []
+    const out = sink()
     vi.stubGlobal('fetch', catalogResponse({ error: 'nope' }, 503))
     const context = new Context([], {
       modelId: 'gpt-6-astra',
       env: {},
       catalogUrl: 'https://example.test/context-three',
-      onModelLine: (line) => lines.push(line),
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     })
 
     await context.initRemote()
 
     expect(context.contextWindow).toBeUndefined()
-    expect(lines[0]).toContain('[model] could not read model limits')
+    expect(messages(out.text())[0]).toContain('could not read model limits')
   })
 
   it('reports a model missing from the catalog', async () => {
-    const lines: string[] = []
+    const out = sink()
     vi.stubGlobal('fetch', catalogResponse({ openai: { models: {} } }))
     const context = new Context([], {
       modelId: 'gpt-6-astra',
       env: {},
       catalogUrl: 'https://example.test/context-four',
-      onModelLine: (line) => lines.push(line),
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     })
 
     await context.initRemote()
 
     expect(context.contextWindow).toBeUndefined()
-    expect(lines[0]).toBe('[model] no context window in catalog for "gpt-6-astra"')
+    expect(messages(out.text())[0]).toBe('no context window in catalog for "gpt-6-astra"')
   })
 
   it('copies the lookup configuration in clone()', async () => {
-    const lines: string[] = []
+    const out = sink()
     vi.stubGlobal(
       'fetch',
       catalogResponse({ openai: { models: { 'gpt-6-astra': { limit: { context: 777 } } } } }),
@@ -344,13 +365,13 @@ describe('Context.initRemote', () => {
       modelId: 'gpt-6-astra',
       env: {},
       catalogUrl: 'https://example.test/context-five',
-      onModelLine: (line) => lines.push(line),
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     })
 
     const copy = original.clone()
     await copy.initRemote()
 
     expect(copy.contextWindow).toBe(777)
-    expect(lines).toHaveLength(1)
+    expect(messages(out.text())).toHaveLength(1)
   })
 })

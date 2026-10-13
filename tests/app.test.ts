@@ -213,7 +213,7 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(app.context?.contextWindow).toBe(1_050_000)
-    expect(out.text()).toContain('[model] openai/gpt-6-astra: 1,050,000 token context window')
+    expect(out.text()).toContain('openai/gpt-6-astra: 1,050,000 token context window')
   })
 
   it('resolves without a window when the catalog is unavailable', async () => {
@@ -233,7 +233,7 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(app.context?.contextWindow).toBeUndefined()
-    expect(out.text()).toContain('[model] could not read model limits')
+    expect(out.text()).toContain('could not read model limits')
   })
 
   it('reports models the catalog does not list', async () => {
@@ -253,7 +253,9 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(app.context?.contextWindow).toBeUndefined()
-    expect(out.text()).toContain('[model] no context window in catalog for "gpt-6-astra"')
+    expect(messages(out.text()).join('\n')).toContain(
+      'no context window in catalog for "gpt-6-astra"',
+    )
   })
 
   it('ignores an invalid context window override and falls back to the catalog', async () => {
@@ -273,7 +275,9 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(app.context?.contextWindow).toBe(1_050_000)
-    expect(out.text()).toContain('[model] ignoring invalid MINIAGENT_CONTEXT_WINDOW="nope"')
+    expect(messages(out.text()).join('\n')).toContain(
+      'ignoring invalid MINIAGENT_CONTEXT_WINDOW="nope"',
+    )
   })
 })
 
@@ -356,7 +360,7 @@ describe('App config file', () => {
     const code = await instance.run()
 
     expect(code).toBe(0)
-    expect(out.text()).toContain(`[config] could not read ${configFile}`)
+    expect(out.text()).toContain(`could not read ${configFile}`)
   })
 
   it('rejects a provider it does not know when creating the client', async () => {

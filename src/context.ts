@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
 import type { LanguageModelUsage, ModelMessage } from 'ai'
+import type { Logger } from 'pino'
 
 import { fetchModelLimits } from './model-info.js'
 import type { ContextSnapshot, ContextStore, ContextUsage } from './store.js'
@@ -53,9 +54,9 @@ export interface ContextOptions {
    */
   dataDirectory?: string
   /**
-   * Receives the `[model] ...` diagnostics emitted by `initRemote()`.
+   * Diagnostics for `initRemote()` (context window lookup).
    */
-  onModelLine?: (line: string) => void
+  logger?: Logger
 }
 
 /**
@@ -100,7 +101,7 @@ export class Context {
   private readonly env: NodeJS.ProcessEnv | undefined
   private readonly catalogUrl: string | undefined
   private readonly dataDirectory: string | undefined
-  private readonly onModelLine: ((line: string) => void) | undefined
+  private readonly logger: Logger | undefined
 
   /**
    * Store this context is bound to, if any.
@@ -139,7 +140,7 @@ export class Context {
     this.env = options.env
     this.catalogUrl = options.catalogUrl
     this.dataDirectory = options.dataDirectory
-    this.onModelLine = options.onModelLine
+    this.logger = options.logger
   }
 
   /**
@@ -273,7 +274,7 @@ export class Context {
       env: this.env,
       catalogUrl: this.catalogUrl,
       dataDirectory: this.dataDirectory,
-      onModelLine: this.onModelLine,
+      logger: this.logger,
     })
     if (this.lastUsage !== undefined) {
       copy.lastUsage = { ...this.lastUsage }
@@ -284,8 +285,8 @@ export class Context {
   /**
    * Fill in `contextWindow` for the configured `modelId`: an explicit
    * `MINIAGENT_CONTEXT_WINDOW` wins, otherwise the limit is read from the
-   * catalog. Resolves to nothing; the result lands in `contextWindow` and the
-   * `[model] ...` diagnostics go to `onModelLine`.
+   * catalog. Resolves to nothing; the result lands in `contextWindow` and
+   * model diagnostics go to the logger.
    *
    * Optional and never throws: without a window the context still works,
    * `remainingTokens` just stays `undefined`.
@@ -303,7 +304,7 @@ export class Context {
         this.contextWindow = value
         return
       }
-      this.log(`[model] ignoring invalid MINIAGENT_CONTEXT_WINDOW="${override}"`)
+      this.logger?.info(`ignoring invalid MINIAGENT_CONTEXT_WINDOW="${override}"`)
     }
 
     try {
@@ -314,20 +315,14 @@ export class Context {
         catalogUrl: this.catalogUrl,
       })
       if (limits?.contextWindow === undefined) {
-        this.log(`[model] no context window in catalog for "${this.modelId}"`)
+        this.logger?.warn(`no context window in catalog for "${this.modelId}"`)
         return
       }
       this.contextWindow = limits.contextWindow
-      this.log(
-        `[model] ${limits.id}: ${limits.contextWindow.toLocaleString('en-US')} token context window`,
-      )
+      this.logger?.info(`${limits.id}: ${limits.contextWindow.toLocaleString('en-US')} token context window`)
     } catch (error) {
-      this.log(`[model] could not read model limits: ${String(error)}`)
+      this.logger?.error(`could not read model limits: ${String(error)}`)
     }
-  }
-
-  private log(line: string): void {
-    this.onModelLine?.(line)
   }
 
   /**

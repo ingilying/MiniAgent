@@ -225,7 +225,7 @@ export class SessionManager {
       env: this.env,
       catalogUrl: this.catalogUrl,
       dataDirectory: this.dataDirectory,
-      onModelLine: this.onModelLine,
+      logger: this.logger,
     }
   }
 
