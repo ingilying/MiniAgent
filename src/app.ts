@@ -1,4 +1,3 @@
-import { rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -27,12 +26,12 @@ import { loadProviders } from './providers.js'
 import type { Providers, ProviderOptions } from './providers.js'
 import { SessionManager } from './sessions.js'
 import { FileContextStore } from './store.js'
+import { defaultLogger, renameFinishedLog } from './logger.js'
+import type { Logger } from 'pino'
 
 const SYSTEM_PROMPT =
   'You are a precise, helpful assistant. ' +
   'Use the available tools to read and change files and run shell commands.'
-
-/** Data directory used when running from source (`src/`), e.g. under `tsx`. */
 
 /** Data directory used when running from source (`src/`), e.g. under `tsx`. */
 const DEV_DATA_DIRECTORY = '.miniagent'
@@ -71,36 +70,21 @@ export interface AppOptions {
    * `false` to skip it.
    */
   envFile?: string | false
-  /** Standard output for diagnostics. Defaults to `process.stdout`. */
-  output?: NodeJS.WritableStream
-  /** Standard error for diagnostics. Defaults to `process.stderr`. */
-  errorOutput?: NodeJS.WritableStream
   /**
-   * Diagnostics channels. Defaults to `[output]` when `output` is set,
-   * else the console. A `logFile` is appended unless the list already
-   * covers it.
-   */
-  outputs?: LogSink[]
-  /**
-   * Error channels. Defaults to `[errorOutput]` when `errorOutput` is set,
-   * else the console error stream.
-   */
-  errorOutputs?: LogSink[]
-  /**
-   * Logger used for diagnostics. Defaults to one built from
-   * `outputs`/`errorOutputs`/`logFile`/`logLevel`; pass one to share it.
+   * Logger used for diagnostics. Defaults to one writing to stdout, or to
+   * `logFile` when set; pass one to capture it (tests use a memory sink).
    */
   logger?: Logger
   /**
    * Quietest log level still emitted. Falls back to `MINIAGENT_LOG_LEVEL`,
    * then `'info'`. Unknown names fall back silently.
    */
-  logLevel?: LogLevel
+  logLevel?: string
   /**
    * File diagnostics go to instead of the console. Falls back to
    * `MINIAGENT_LOG_FILE`. Without either, diagnostics tee to the console
-   * and `<dataDirectory>/latest.log`. Explicit `outputs`/`errorOutputs`
-   * lists are kept and extended, so an instance can log to both.
+   * and `<dataDirectory>/log/latest.log`, renamed to the finish time when
+   * the run ends.
    */
   logFile?: string
   /** Use this agent instead of building one from the provider registry. */
@@ -143,7 +127,6 @@ export interface AppOptions {
  * by tests without a TTY, a network, or a real model.
  */
 export class App {
-  private readonly args: readonly string[]
   private readonly env: NodeJS.ProcessEnv
   private readonly injectedAgent: Agent | undefined
   private readonly catalogUrl: string | undefined
@@ -153,8 +136,17 @@ export class App {
   private readonly envFile: string | false
   private readonly configFile: string | false
 
-  /** Diagnostics: lines, errors, and the plugin-visible logger. */
+  /** Unbound logger every module child derives from: each module binds
+   * directly on the root. */
+  private readonly root: Logger
+  /** Diagnostics logger for the app module. */
   readonly logger: Logger
+  /**
+   * Active default log file (`<dataDirectory>/log/latest.log`), renamed to
+   * a timestamp at the end of the run. Absent with an injected logger or
+   * an explicit log file.
+   */
+  private readonly latestFile: string | undefined
 
   /** Directory holding sessions, the config file, and the model cache. */
   readonly dataDirectory: string
@@ -197,45 +189,13 @@ export class App {
     this.env = options.env ?? process.env
     this.dataDirectory = options.dataDirectory ?? defaultDataDirectory()
     this.cwd = options.cwd ?? process.cwd()
-    this.logger =
-      options.logger ??
-      new Logger({
-        outputs: sinkList(options.outputs, options.output, 'stdout'),
-        errorOutputs: sinkList(options.errorOutputs, options.errorOutput, 'stderr'),
-        level: options.logLevel ?? parseLogLevel(this.env.MINIAGENT_LOG_LEVEL) ?? 'info',
-      })
-    const logFile = options.logFile ?? this.env.MINIAGENT_LOG_FILE
-    if (logFile !== undefined) {
-      const fileSink = new FileSink(logFile)
-      // Without an explicit list the file replaces the console; with one it
-      // is added, so an instance can log to both.
-      if (options.outputs === undefined) {
-        this.logger.setOutputs([fileSink])
-      } else {
-        this.logger.addOutput(fileSink)
-      }
-      if (options.errorOutputs === undefined) {
-        this.logger.setErrorOutputs([fileSink])
-      } else {
-        this.logger.addErrorOutput(fileSink)
-      }
-    } else if (
-      options.logger === undefined &&
-      options.outputs === undefined &&
-      options.errorOutputs === undefined
-    ) {
-      // Default run log: the console plus `<dataDirectory>/latest.log`,
-      // restarted every run so it always holds the latest one.
-      const latest = join(this.dataDirectory, 'latest.log')
-      try {
-        rmSync(latest, { force: true })
-      } catch {
-        // A stale log is harmless; the sink appends to it below.
-      }
-      const latestSink = new FileSink(latest)
-      this.logger.addOutput(latestSink)
-      this.logger.addErrorOutput(latestSink)
-    }
+    const chosen =
+      options.logger === undefined
+        ? defaultLogger(this.dataDirectory, this.env, options.logLevel, options.logFile)
+        : { logger: options.logger, latestFile: undefined as string | undefined }
+    this.root = chosen.logger
+    this.latestFile = chosen.latestFile
+    this.logger = this.root.child({ module: 'app' })
     this.injectedAgent = options.agent
     this.catalogUrl = options.catalogUrl
     this.version = VERSION
@@ -270,31 +230,24 @@ export class App {
     this.agents = agents
     const resumeId = this.env.MINIAGENT_SESSION ?? this.defaultSession
     const context =
-      resumeId === undefined ? await manager.createSession() : await manager.resume(resumeId)
+      resumeId === undefined
+        ? await this.sessions.createSession()
+        : await this.sessions.resume(resumeId)
 
     this.context = context
     this.sessionId = context.id
     this.providerId = context.providerId
     this.modelId = context.modelId ?? this.defaultModel
 
-    const closeAndExit = (code: number): void => {
-      void manager
-        .shutdown()
-        .finally(() => this.logger.close())
-        .finally(() => process.exit(code))
-    }
-    const onSigint = (): void => closeAndExit(130)
-    const onSigterm = (): void => closeAndExit(143)
-    process.once('SIGINT', onSigint)
-    process.once('SIGTERM', onSigterm)
+    // Signal handling belongs to the entry point (see runCli): this class
+    // never exits the process, so it stays safe to embed.
     try {
-      return await this.boot(config, manager, agents, context)
+      return await this.boot(config, this.sessions, agents, context)
     } finally {
-      process.removeListener('SIGINT', onSigint)
-      process.removeListener('SIGTERM', onSigterm)
-      await manager.shutdown()
+      await this.sessions.shutdown()
       agents.releaseAll()
-      await this.logger.close()
+      this.logger.flush()
+      renameFinishedLog(this.latestFile)
     }
   }
 
@@ -320,7 +273,7 @@ export class App {
     }
     const providerId = context.providerId
     const modelId = context.modelId ?? this.defaultModel
-    this.logger.debug(`[agent] ${providerId}/${modelId} for session ${context.id}`)
+    this.logger.info(`${providerId}/${modelId} for session ${context.id}`)
     return this.buildAgent(this.providers, providerId, modelId, context)
   }
 
@@ -341,7 +294,7 @@ export class App {
     try {
       plugins = await loadPlugins(config.plugins ?? [], this.dataDirectory)
     } catch (error) {
-      this.error(error instanceof Error ? error.message : String(error))
+      this.logger.error(error instanceof Error ? error.message : String(error))
       return 1
     }
     const allPlugins = [deepseekPlugin, basicToolsPlugin, ...plugins]
@@ -367,7 +320,7 @@ export class App {
 
       const host = {
         tools: this.tools,
-        providers: this.providers as Providers,
+        providers,
         systemPromptParts: this.systemPromptParts,
         dataDirectory: this.dataDirectory,
         providerId,
@@ -406,7 +359,7 @@ export class App {
         }
       }
     } catch (error) {
-      this.error(error instanceof Error ? error.message : String(error))
+      this.logger.error(error instanceof Error ? error.message : String(error))
       return 1
     }
 
@@ -415,11 +368,11 @@ export class App {
         this.agent = this.agentFor(context)
       } catch (error) {
         if (NoSuchProviderError.isInstance(error)) {
-          this.error(
+          this.logger.error(
             `Unknown provider "${providerId}". Known providers: ${error.availableProviders.join(', ')}.`,
           )
         } else {
-          this.error(error instanceof Error ? error.message : String(error))
+          this.logger.error(error instanceof Error ? error.message : String(error))
         }
         return 1
       }
@@ -462,7 +415,7 @@ export class App {
         }),
       )
     } catch (error) {
-      this.error(error instanceof Error ? error.message : String(error))
+      this.logger.error(error instanceof Error ? error.message : String(error))
       return 1
     }
 
@@ -482,7 +435,7 @@ export class App {
       process.loadEnvFile(this.envFile)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.line(`[env] could not read ${this.envFile}: ${String(error)}`)
+        this.logger.info(`could not read ${this.envFile}: ${String(error)}`)
       }
     }
   }
@@ -495,7 +448,7 @@ export class App {
     try {
       return await loadConfig(this.configFile)
     } catch (error) {
-      this.line(`[config] could not read ${this.configFile}: ${String(error)}`)
+      this.logger.warn(`could not read ${this.configFile}: ${String(error)}`)
       return {}
     }
   }
@@ -515,8 +468,7 @@ export class App {
       modelId: config.model ?? this.env.OPENAI_MODEL ?? this.defaultModel,
       env: this.env,
       catalogUrl: this.catalogUrl,
-      logger: this.logger,
-      onModelLine: (line) => this.line(line),
+      logger: this.root.child({ module: 'sessions' }),
     })
   }
 
@@ -544,30 +496,7 @@ export class App {
       tools: { ...this.tools },
       context,
       maxSteps: 8,
-      logger: this.logger,
+      logger: this.root.child({ module: 'agent' }),
     })
   }
-
-  private line(text = ''): void {
-    this.logger.line(text)
-  }
-
-  private error(text: string): void {
-    this.logger.error(text)
-  }
-}
-
-function pluginError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function sinkList(
-  targets: readonly LogSink[] | undefined,
-  single: NodeJS.WritableStream | undefined,
-  name: string,
-): LogSink[] | undefined {
-  if (targets !== undefined) {
-    return [...targets]
-  }
-  return single === undefined ? undefined : [new StreamSink(single, name)]
 }

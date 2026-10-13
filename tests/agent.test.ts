@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Agent, type AgentEvent, type AgentInput } from '../src/agent.js'
 import { Context } from '../src/context.js'
-import { Logger, StreamSink } from '../src/logger.js'
+import pino from 'pino'
 import { writeTool } from '../src/tools/write.js'
 
 const usage = {
@@ -325,7 +325,8 @@ describe('Agent with Context', () => {
     const context = new Context().addUser('hi')
     const agent = new Agent({
       model,
-      logger: new Logger({ outputs: [new StreamSink(output, 'test')], level: 'debug' }),
+      context,
+      logger: pino({ level: 'debug', base: undefined }, output),
     })
 
     await agent.run(context)

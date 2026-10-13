@@ -11,10 +11,19 @@ import { Agent } from '../src/agent.js'
 import { App } from '../src/app.js'
 import { loadPlugins } from '../src/plugins/loader.js'
 import { readTool } from '../src/tools/read.js'
+import pino from 'pino'
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 5, text: 5, reasoning: undefined },
+}
+
+/** Logged texts: diagnostics now leave as JSON lines, so read the msg field. */
+function messages(text: string): string[] {
+  return text
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => (JSON.parse(line) as { msg: string }).msg)
 }
 
 function textAgent(text: string): Agent {
@@ -69,8 +78,7 @@ function appWithConfig(config: unknown, err = sink()): App {
     envFile: false,
     configFile: false,
     dataDirectory: directory,
-    output: sink().stream,
-    errorOutput: err.stream,
+    logger: pino({ level: 'info', base: undefined }, err.stream),
     agent: textAgent('hi'),
   })
 }
@@ -88,8 +96,7 @@ function appFromFile(configFile: string, err = sink()): App {
     envFile: false,
     configFile,
     dataDirectory: directory,
-    output: sink().stream,
-    errorOutput: err.stream,
+    logger: pino({ level: 'info', base: undefined }, err.stream),
   })
 }
 
@@ -292,7 +299,7 @@ describe('App plugins', () => {
     const code = await appFromFile(configFile, err).run()
 
     expect(code).toBe(1)
-    expect(err.text()).toContain('Plugin "./missing.mjs" failed')
+    expect(messages(err.text()).join('\n')).toContain('Plugin "./missing.mjs" failed')
   })
 
   it('fails fast when setup throws, naming the plugin', async () => {
@@ -307,7 +314,7 @@ describe('App plugins', () => {
     const code = await appFromFile(configFile, err).run()
 
     expect(code).toBe(1)
-    expect(err.text()).toContain('Plugin "boom" failed: kaput')
+    expect(messages(err.text()).join('\n')).toContain('Plugin "boom" failed: kaput')
   })
 
   it('keeps built-in tools and prompt with no plugins', async () => {
@@ -400,8 +407,7 @@ describe('App plugin run', () => {
       envFile: false,
       configFile,
       dataDirectory: directory,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, sink().stream),
       agent: textAgent('hi'),
     })
 
@@ -432,7 +438,23 @@ describe('App plugin run', () => {
     const code = await appFromFile(configFile, err).run()
 
     expect(code).toBe(1)
-    expect(err.text()).toContain('Plugin "ui-down" failed: ui-down')
+    expect(messages(err.text()).join('\n')).toContain('Plugin "ui-down" failed: ui-down')
+  })
+
+  it('hands plugins a plugin-module logger', async () => {
+    await writeFile(
+      join(directory, 'mod.mjs'),
+      `export default { name: 'mod', setup(host) { globalThis.__modBinding = host.logger.bindings(); } };`,
+      'utf8',
+    )
+    const configFile = await writeConfigFile({ plugins: ['./mod.mjs'] })
+
+    expect(await appFromFile(configFile).run()).toBe(0)
+
+    expect((globalThis as Record<string, unknown>).__modBinding).toMatchObject({
+      module: 'plugin',
+    })
+    delete (globalThis as Record<string, unknown>).__modBinding
   })
 
   it('stays headless with no run methods', async () => {

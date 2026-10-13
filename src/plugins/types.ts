@@ -3,7 +3,7 @@ import type { ToolSet } from 'ai'
 import type { Agent } from '../agent.js'
 import type { AgentsManager } from '../agents.js'
 import type { Context } from '../context.js'
-import type { Logger } from '../logger.js'
+import type { Logger } from 'pino'
 import type { Providers } from '../providers.js'
 import type { SessionManager } from '../sessions.js'
 

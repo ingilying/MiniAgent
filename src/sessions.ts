@@ -5,8 +5,8 @@ import { dirname, join, resolve } from 'node:path'
 import { z } from 'zod'
 
 import { Context } from './context.js'
-import type { Logger } from './logger.js'
-import type { ContextStore } from './store.js'
+import type { Logger } from 'pino'
+import { CorruptSnapshotError, type ContextStore } from './store.js'
 
 const sessionInfoSchema = z.object({
   id: z.string().min(1),
@@ -44,8 +44,6 @@ export interface SessionManagerOptions {
   catalogUrl?: string
   /** Receives lifecycle lines (created, saved, pruned) at debug level. */
   logger?: Logger
-  /** Receives the `[model] ...` diagnostics emitted by `initRemote()`. */
-  onModelLine?: (line: string) => void
 }
 
 /**
@@ -72,7 +70,6 @@ export class SessionManager {
   private readonly env: NodeJS.ProcessEnv | undefined
   private readonly catalogUrl: string | undefined
   private readonly logger: Logger | undefined
-  private readonly onModelLine: ((line: string) => void) | undefined
 
   /** Project directory this manager scopes history to (resolved). */
   readonly cwd: string
@@ -86,7 +83,6 @@ export class SessionManager {
     this.env = options.env
     this.catalogUrl = options.catalogUrl
     this.logger = options.logger
-    this.onModelLine = options.onModelLine
     this.index = index
   }
 
@@ -124,7 +120,7 @@ export class SessionManager {
     this.open.set(context.id, context)
     this.index.touch(context.id)
     await this.index.save()
-    this.logger?.debug(`[session] created ${context.id} in ${this.cwd}`)
+    this.logger?.debug(`created ${context.id} in ${this.cwd}`)
     return context
   }
 
@@ -146,7 +142,7 @@ export class SessionManager {
     this.open.set(context.id, context)
     this.index.touch(context.id)
     await this.index.save()
-    this.logger?.debug(`[session] resumed ${context.id} in ${this.cwd}`)
+    this.logger?.debug(`resumed ${context.id} in ${this.cwd}`)
     return context
   }
 
@@ -171,7 +167,7 @@ export class SessionManager {
     this.open.set(context.id, context)
     this.index.touch(context.id)
     await this.index.save()
-    this.logger?.debug(`[session] attached ${context.id} in ${this.cwd}`)
+    this.logger?.debug(`attached ${context.id} in ${this.cwd}`)
     return context
   }
 
@@ -187,7 +183,7 @@ export class SessionManager {
         await this.store.delete(id)
         this.index.drop(id)
         await this.index.save()
-        this.logger?.debug(`[session] pruned ${id}`)
+        this.logger?.debug(`pruned ${id}`)
       }
       return false
     }
@@ -195,11 +191,11 @@ export class SessionManager {
     if (context.messageCount > 0) {
       await context.save()
       this.index.touch(id)
-      this.logger?.debug(`[session] saved ${id}`)
+      this.logger?.debug(`saved ${id}`)
     } else {
       await this.store.delete(id)
       this.index.drop(id)
-      this.logger?.debug(`[session] pruned ${id}`)
+      this.logger?.debug(`pruned ${id}`)
     }
     await this.index.save()
     return context.messageCount > 0
@@ -219,7 +215,7 @@ export class SessionManager {
         pruned += 1
       }
     }
-    this.logger?.debug(`[session] shutdown: ${saved} saved, ${pruned} pruned in ${this.cwd}`)
+    this.logger?.debug(`shutdown: ${saved} saved, ${pruned} pruned in ${this.cwd}`)
   }
 
   private contextDefaults() {

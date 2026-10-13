@@ -23,6 +23,10 @@ export function buildCli(version: string = VERSION): Command {
  * Parses the arguments after the script name and boots the app with the
  * resulting prompt. `--help` and `--version` are handled by the command itself,
  * which prints and exits before the app is built.
+ *
+ * Owns process signals: on SIGINT/SIGTERM open sessions are saved and the
+ * process exits with the conventional code. `App` itself never exits, so it
+ * stays safe to embed.
  */
 export async function runCli(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
   const program = buildCli()

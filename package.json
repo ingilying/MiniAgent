@@ -43,6 +43,7 @@
     "@ai-sdk/openai-compatible": "^3.0.59",
     "ai": "^7.0.116",
     "commander": "^14.0.3",
+    "pino": "10.4.0",
     "zod": "^4.6.5"
   }
 }

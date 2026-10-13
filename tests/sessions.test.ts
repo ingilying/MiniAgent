@@ -9,7 +9,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import { Agent } from '../src/agent.js'
 import { App } from '../src/app.js'
 import { Context } from '../src/context.js'
-import { Logger, StreamSink } from '../src/logger.js'
+import pino from 'pino'
 import type { Providers } from '../src/providers.js'
 import { SessionManager } from '../src/sessions.js'
 import { FileContextStore } from '../src/store.js'
@@ -207,10 +207,7 @@ describe('SessionManager', () => {
       dataDirectory,
       cwd: projectA,
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
-      logger: new Logger({
-        outputs: [new StreamSink(out.stream, 'test')],
-        level: 'debug',
-      }),
+      logger: pino({ level: 'debug', base: undefined }, out.stream),
     })
 
     const empty = await manager.createSession()
@@ -220,11 +217,11 @@ describe('SessionManager', () => {
     await manager.shutdown()
 
     const text = out.text()
-    expect(text).toContain(`[session] created ${empty.id}`)
-    expect(text).toContain(`[session] pruned ${empty.id}`)
-    expect(text).toContain(`[session] created ${kept.id}`)
-    expect(text).toContain(`[session] saved ${kept.id}`)
-    expect(text).toContain('[session] shutdown: 1 saved, 0 pruned')
+    expect(text).toContain(`created ${empty.id}`)
+    expect(text).toContain(`pruned ${empty.id}`)
+    expect(text).toContain(`created ${kept.id}`)
+    expect(text).toContain(`saved ${kept.id}`)
+    expect(text).toContain('shutdown: 1 saved, 0 pruned')
   })
 
   it('drives several sessions through one agent at the same time', async () => {
@@ -260,8 +257,7 @@ describe('App multi-session', () => {
       configFile: false,
       dataDirectory,
       cwd,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, sink().stream),
     })
   }
 
@@ -292,8 +288,7 @@ describe('App multi-session', () => {
       configFile,
       dataDirectory,
       cwd: projectA,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     })
 
     expect(await app.run()).toBe(0)
@@ -334,8 +329,7 @@ describe('App multi-session', () => {
       configFile,
       dataDirectory,
       cwd: projectA,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     })
 
     expect(await app.run()).toBe(0)
@@ -375,8 +369,7 @@ describe('App multi-session', () => {
       configFile: false,
       dataDirectory,
       cwd: projectA,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     })
     expect(await app.run()).toBe(0)
 
@@ -428,8 +421,7 @@ describe('App multi-session', () => {
       configFile,
       dataDirectory,
       cwd: projectA,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     })
     expect(await app.run()).toBe(0)
 
@@ -453,17 +445,35 @@ describe('App multi-session', () => {
       configFile: false,
       dataDirectory,
       cwd: projectA,
-      logger: new Logger({
-        outputs: [new StreamSink(out.stream, 'test')],
-        level: 'debug',
-      }),
+      logger: pino({ level: 'debug', base: undefined }, out.stream),
     })
     expect(await app.run()).toBe(0)
 
     const text = out.text()
-    expect(text).toContain('[plugin] loaded:')
+    expect(text).toContain('loaded:')
     expect(text).toContain('basic-tools')
-    expect(text).toContain(`[session] created ${app.sessionId}`)
-    expect(text).toContain(`[agent] openai/gpt-6-astra for session ${app.sessionId}`)
+    expect(text).toContain(`created ${app.sessionId}`)
+    expect(text).toContain(`openai/gpt-6-astra for session ${app.sessionId}`)
+
+    const raw = text.split('\n').filter((line) => line.length > 0)
+    const logged = raw.map((line) => JSON.parse(line) as { module?: string; msg: string })
+    const moduleOf = (fragment: string): string | undefined =>
+      logged.find((line) => line.msg.includes(fragment))?.module
+    expect(moduleOf('loaded:')).toBe('app')
+    expect(moduleOf(`created ${app.sessionId}`)).toBe('sessions')
+    expect(moduleOf('for session')).toBe('app')
+    // One module key per line: nested same-key children would print it twice.
+    for (const line of raw) {
+      expect(line.match(/"module"/g)).toHaveLength(1)
+    }
+  })
+
+  it('binds built agents to the agent module', async () => {
+    const app = testApp(projectA)
+    expect(await app.run()).toBe(0)
+
+    const agent = app.agentFor(app.context as Context)
+
+    expect(agent.logger?.bindings()).toMatchObject({ module: 'agent' })
   })
 })

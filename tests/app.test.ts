@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Agent } from '../src/agent.js'
 import { App, defaultDataDirectory, isReleaseBuild } from '../src/app.js'
+import pino from 'pino'
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
@@ -51,6 +52,14 @@ function catalogResponse(body: unknown, status = 200): typeof globalThis.fetch {
   return async () => new Response(JSON.stringify(body), { status })
 }
 
+/** Logged texts: diagnostics now leave as JSON lines, so read the msg field. */
+function messages(text: string): string[] {
+  return text
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => (JSON.parse(line) as { msg: string }).msg)
+}
+
 let directory: string
 
 beforeEach(async () => {
@@ -73,8 +82,7 @@ describe('App', () => {
       envFile: false,
       configFile: false,
       dataDirectory: directory,
-      output: out.stream,
-      errorOutput: err.stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
     }).run()
 
     expect(code).toBe(0)
@@ -89,7 +97,7 @@ describe('App', () => {
       envFile: false,
       configFile: false,
       dataDirectory: directory,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     })
 
     const code = await app.run()
@@ -113,8 +121,7 @@ describe('App', () => {
       envFile: false,
       configFile: false,
       dataDirectory: directory,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent,
     })
 
@@ -144,8 +151,7 @@ describe('App', () => {
       envFile: false,
       configFile: false,
       dataDirectory: directory,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
       agent: textAgent('hi'),
     })
 
@@ -165,8 +171,7 @@ describe('App', () => {
       envFile: false,
       configFile: false,
       dataDirectory: directory,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
       agent: textAgent('hi'),
     })
 
@@ -185,8 +190,7 @@ describe('App', () => {
       envFile: false,
       configFile: false,
       dataDirectory: directory,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     })
 
     const code = await app.run()
@@ -204,8 +208,7 @@ describe('App', () => {
       env: { OPENAI_API_KEY: 'test' },
       envFile: false,
       configFile: false,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
       catalogUrl: 'https://example.test/app-one',
       dataDirectory: directory,
@@ -226,8 +229,7 @@ describe('App', () => {
       env: { OPENAI_API_KEY: 'test' },
       envFile: false,
       configFile: false,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
       catalogUrl: 'https://example.test/app-two',
       dataDirectory: directory,
@@ -248,8 +250,7 @@ describe('App', () => {
       env: { OPENAI_API_KEY: 'test' },
       envFile: false,
       configFile: false,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
       catalogUrl: 'https://example.test/app-three',
       dataDirectory: directory,
@@ -270,8 +271,7 @@ describe('App', () => {
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: 'nope' },
       envFile: false,
       configFile: false,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
       catalogUrl: 'https://example.test/app-four',
       dataDirectory: directory,
@@ -297,8 +297,7 @@ describe('App config file', () => {
       args: [],
       envFile: false,
       dataDirectory: directory,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
       ...options,
     })
@@ -379,13 +378,12 @@ describe('App config file', () => {
       envFile: false,
       dataDirectory: directory,
       configFile,
-      output: sink().stream,
-      errorOutput: err.stream,
+      logger: pino({ level: 'info', base: undefined }, err.stream),
     }).run()
 
     expect(code).toBe(1)
-    expect(err.text()).toContain('Unknown provider "who-knows"')
-    expect(err.text()).toContain('openai, anthropic, google')
+    expect(messages(err.text()).join('\n')).toContain('Unknown provider "who-knows"')
+    expect(messages(err.text()).join('\n')).toContain('openai, anthropic, google')
   })
 
   it('skips provider validation when the agent is injected', async () => {
@@ -397,8 +395,7 @@ describe('App config file', () => {
       envFile: false,
       dataDirectory: directory,
       configFile,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
       agent: textAgent('hi'),
     }).run()
 
@@ -419,8 +416,7 @@ describe('App config file', () => {
       envFile: false,
       dataDirectory: directory,
       configFile,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
       agent: textAgent('hi'),
     }).run()
 
@@ -440,8 +436,7 @@ describe('App config file', () => {
       envFile: false,
       dataDirectory: directory,
       configFile,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
     }).run()
 
     expect(code).toBe(0)
@@ -460,8 +455,7 @@ describe('App config file', () => {
       envFile: false,
       dataDirectory: directory,
       configFile,
-      output: sink().stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
       agent: textAgent('hi'),
     }).run()
 
@@ -515,19 +509,36 @@ describe('App data directory', () => {
   it('stamps the package version into the build', async () => {
     const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
 
-    const app = new App({ env: {}, envFile: false, configFile: false })
+    const app = new App({
+      env: {},
+      envFile: false,
+      configFile: false,
+      dataDirectory: directory,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
+    })
 
     expect(app.version).toBe(pkg.version)
   })
 
   it('defaults the data directory to the checkout directory', () => {
-    const app = new App({ env: {}, envFile: false, configFile: false })
+    const app = new App({
+      env: {},
+      envFile: false,
+      configFile: false,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
+    })
 
     expect(app.dataDirectory).toBe('.miniagent')
   })
 
   it('takes an explicit data directory over the default', () => {
-    const app = new App({ env: {}, envFile: false, configFile: false, dataDirectory: directory })
+    const app = new App({
+      env: {},
+      envFile: false,
+      configFile: false,
+      dataDirectory: directory,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
+    })
 
     expect(app.dataDirectory).toBe(directory)
   })
@@ -572,8 +583,7 @@ describe('App environment file', () => {
         envFile,
         configFile: false,
         dataDirectory: directory,
-        output: sink().stream,
-        errorOutput: sink().stream,
+        logger: pino({ level: 'silent', base: undefined }, sink().stream),
         agent: textAgent('hi'),
       })
 
@@ -597,8 +607,7 @@ describe('App environment file', () => {
           envFile,
           configFile: false,
           dataDirectory: directory,
-          output: sink().stream,
-          errorOutput: sink().stream,
+          logger: pino({ level: 'silent', base: undefined }, sink().stream),
           agent: textAgent('hi'),
         })
 
@@ -618,15 +627,14 @@ describe('App environment file', () => {
       envFile: join(directory, 'missing.env'),
       configFile: false,
       dataDirectory: directory,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
     })
 
     const code = await app.run()
 
     expect(code).toBe(0)
-    expect(out.text()).not.toContain('[env]')
+    expect(out.text()).not.toContain('could not read')
   })
 
   it('reports an environment file it cannot read', async () => {
@@ -637,14 +645,13 @@ describe('App environment file', () => {
       envFile: directory,
       configFile: false,
       dataDirectory: directory,
-      output: out.stream,
-      errorOutput: sink().stream,
+      logger: pino({ level: 'info', base: undefined }, out.stream),
       agent: textAgent('hi'),
     })
 
     const code = await app.run()
 
     expect(code).toBe(0)
-    expect(out.text()).toContain(`[env] could not read ${directory}`)
+    expect(out.text()).toContain(`could not read ${directory}`)
   })
 })
