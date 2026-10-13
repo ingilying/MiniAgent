@@ -46,8 +46,8 @@ export function defaultDataDirectory(): string {
 }
 
 export interface AppOptions {
-  /** Arguments after the script name. Defaults to `process.argv.slice(2)`. */
-  args?: readonly string[]
+  /** Initial prompt to send to the agent. Parsed by the CLI, not the app. */
+  prompt?: string
   /**
    * Environment variables used to resolve configuration. Defaults to
    * `process.env`, which the `.env` file is merged into. Pass a different
@@ -145,7 +145,7 @@ export class App {
   /** Version stamped into this build. */
   readonly version: string
 
-  /** First positional argument, resolved by `run()`. */
+  /** Initial prompt to send to the agent. */
   prompt: string | undefined
   /** Boot session id, resolved by `run()`. A new id per instance unless resumed. */
   sessionId: string | undefined
@@ -179,7 +179,6 @@ export class App {
   }
 
   constructor(options: AppOptions = {}) {
-    this.args = options.args ?? process.argv.slice(2)
     this.env = options.env ?? process.env
     this.dataDirectory = options.dataDirectory ?? defaultDataDirectory()
     this.cwd = options.cwd ?? process.cwd()
@@ -202,6 +201,7 @@ export class App {
     this.defaultSession = options.defaultSession
     this.envFile = options.envFile ?? join(process.cwd(), '.env')
     this.configFile = options.configFile ?? join(this.dataDirectory, 'config.json')
+    this.prompt = options.prompt
     this.tools = {}
     this.systemPromptParts = [SYSTEM_PROMPT]
   }
@@ -219,10 +219,7 @@ export class App {
     this.readEnvFile()
     const config = await this.readConfig()
 
-    this.prompt = this.args[0]
-
-    const manager = await this.loadSessions(config)
-    this.sessions = manager
+    this.sessions = await this.loadSessions(config)
     const agents = new AgentsManager()
     this.agents = agents
     const resumeId = this.env.MINIAGENT_SESSION ?? this.defaultSession

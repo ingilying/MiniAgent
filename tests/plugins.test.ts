@@ -73,7 +73,6 @@ afterEach(async () => {
 
 function appWithConfig(config: unknown, err = sink()): App {
   return new App({
-    args: [],
     env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
     envFile: false,
     configFile: false,
@@ -91,7 +90,6 @@ async function writeConfigFile(config: unknown): Promise<string> {
 
 function appFromFile(configFile: string, err = sink()): App {
   return new App({
-    args: [],
     env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
     envFile: false,
     configFile,
@@ -401,7 +399,7 @@ describe('App plugin run', () => {
       pluginConfig: { spy: { tag: 'v1' } },
     })
     const app = new App({
-      args: ['hello'],
+      prompt: 'hello',
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile,

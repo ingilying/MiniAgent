@@ -77,7 +77,6 @@ describe('App', () => {
     const err = sink()
 
     const code = await new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -92,7 +91,6 @@ describe('App', () => {
 
   it('builds the agent without an API key in the config file', async () => {
     const app = new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -116,7 +114,7 @@ describe('App', () => {
     })
     vi.stubGlobal('fetch', catalog)
     const app = new App({
-      args: ['what is 17 * 23?'],
+      prompt: 'what is 17 * 23?',
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -141,7 +139,6 @@ describe('App', () => {
 
   it('honours OPENAI_MODEL and MINIAGENT_SESSION', async () => {
     const app = new App({
-      args: [],
       env: {
         OPENAI_API_KEY: 'test',
         OPENAI_MODEL: 'gpt-5-nova',
@@ -166,7 +163,6 @@ describe('App', () => {
 
   it('generates a session id when none is given', async () => {
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -185,7 +181,7 @@ describe('App', () => {
 
   it('builds an agent from the provider when none is injected', async () => {
     const app = new App({
-      args: ['hi'],
+      prompt: 'hi',
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -204,7 +200,6 @@ describe('App', () => {
     const out = sink()
     vi.stubGlobal('fetch', catalogResponse(catalogWithGpt))
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test' },
       envFile: false,
       configFile: false,
@@ -225,7 +220,6 @@ describe('App', () => {
     const out = sink()
     vi.stubGlobal('fetch', catalogResponse({ error: 'nope' }, 503))
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test' },
       envFile: false,
       configFile: false,
@@ -246,7 +240,6 @@ describe('App', () => {
     const out = sink()
     vi.stubGlobal('fetch', catalogResponse({ openai: { models: {} } }))
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test' },
       envFile: false,
       configFile: false,
@@ -267,7 +260,6 @@ describe('App', () => {
     const out = sink()
     vi.stubGlobal('fetch', catalogResponse(catalogWithGpt))
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: 'nope' },
       envFile: false,
       configFile: false,
@@ -294,7 +286,6 @@ describe('App config file', () => {
 
   function app(options: Partial<ConstructorParameters<typeof App>[0]>, out = sink()): App {
     return new App({
-      args: [],
       envFile: false,
       dataDirectory: directory,
       logger: pino({ level: 'info', base: undefined }, out.stream),
@@ -373,7 +364,6 @@ describe('App config file', () => {
     const err = sink()
 
     const code = await new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
@@ -390,7 +380,6 @@ describe('App config file', () => {
     const configFile = await writeConfig({ provider: 'who-knows' })
 
     const code = await new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
@@ -411,7 +400,6 @@ describe('App config file', () => {
     })
 
     const code = await new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
@@ -431,7 +419,6 @@ describe('App config file', () => {
     })
 
     const code = await new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
@@ -450,7 +437,6 @@ describe('App config file', () => {
     })
 
     const code = await new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       dataDirectory: directory,
@@ -579,7 +565,6 @@ describe('App environment file', () => {
 
     await withEnv({ MINIAGENT_CONTEXT_WINDOW: '1000' }, async () => {
       const app = new App({
-        args: [],
         envFile,
         configFile: false,
         dataDirectory: directory,
@@ -603,7 +588,6 @@ describe('App environment file', () => {
       { OPENAI_API_KEY: 'test', OPENAI_MODEL: 'from-env', MINIAGENT_CONTEXT_WINDOW: '1000' },
       async () => {
         const app = new App({
-          args: [],
           envFile,
           configFile: false,
           dataDirectory: directory,
@@ -622,7 +606,6 @@ describe('App environment file', () => {
   it('stays quiet when the environment file does not exist', async () => {
     const out = sink()
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: join(directory, 'missing.env'),
       configFile: false,
@@ -640,7 +623,6 @@ describe('App environment file', () => {
   it('reports an environment file it cannot read', async () => {
     const out = sink()
     const app = new App({
-      args: [],
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: directory,
       configFile: false,

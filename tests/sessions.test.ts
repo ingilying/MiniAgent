@@ -281,7 +281,6 @@ describe('SessionManager', () => {
 describe('App multi-session', () => {
   function testApp(cwd: string): App {
     return new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -312,7 +311,6 @@ describe('App multi-session', () => {
     const configFile = join(dataDirectory, 'config.json')
     await writeFile(configFile, JSON.stringify({ plugins: ['./talk.mjs'] }), 'utf8')
     const app = new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile,
@@ -353,7 +351,6 @@ describe('App multi-session', () => {
     const configFile = join(dataDirectory, 'config.json')
     await writeFile(configFile, JSON.stringify({ plugins: ['./spy.mjs'] }), 'utf8')
     const app = new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile,
@@ -393,7 +390,6 @@ describe('App multi-session', () => {
       )
     }
     const app = new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000', MINIAGENT_SESSION: 'a' },
       envFile: false,
       configFile: false,
@@ -445,7 +441,6 @@ describe('App multi-session', () => {
     const configFile = join(dataDirectory, 'config.json')
     await writeFile(configFile, JSON.stringify({ plugins: ['./probe.mjs'] }), 'utf8')
     const app = new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile,
@@ -469,7 +464,6 @@ describe('App multi-session', () => {
   it('logs boot plugins and agents at debug level', async () => {
     const out = sink()
     const app = new App({
-      args: [],
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,

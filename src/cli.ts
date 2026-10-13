@@ -2,7 +2,6 @@ import { Command } from 'commander'
 
 import { App } from './app.js'
 import { VERSION } from './build-info.js'
-import { parseLogLevel } from './logger.js'
 
 /**
  * Builds the command-line interface: the program name, the `-v` / `--version`
@@ -34,9 +33,28 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
 
   const prompt = program.args[0]
   const { logFile, logLevel } = program.opts() as { logFile?: string; logLevel?: string }
-  return new App({
-    args: prompt === undefined ? [] : [prompt],
-    logFile,
-    logLevel: parseLogLevel(logLevel),
-  }).run()
+  const app = new App({ prompt, logFile, logLevel })
+  const onSigint = (): void => {
+    void shutdownAndExit(app, 130)
+  }
+  const onSigterm = (): void => {
+    void shutdownAndExit(app, 143)
+  }
+  process.once('SIGINT', onSigint)
+  process.once('SIGTERM', onSigterm)
+  try {
+    return await app.run()
+  } finally {
+    process.removeListener('SIGINT', onSigint)
+    process.removeListener('SIGTERM', onSigterm)
+  }
+}
+
+async function shutdownAndExit(app: App, code: number): Promise<never> {
+  try {
+    await app.shutdown()
+  } finally {
+    app.logger.flush()
+    process.exit(code)
+  }
 }
