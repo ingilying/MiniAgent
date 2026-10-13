@@ -92,8 +92,6 @@ export interface Plugin {
   onProvidersCreating?: (providers: Providers, config?: unknown) => void | Promise<void>
   /** Runs after the host is built. Mutate `host.tools`, `host.providers`, and `host.systemPromptParts` directly. */
   setup?: (host: PluginHost, config?: unknown) => void | Promise<void>
-  /** Returns an extra system prompt part, or nothing. Parts append in load order. */
-  systemPrompt?: () => string | undefined | Promise<string | undefined>
   /**
    * Runs after the agent is built. All `run` methods start concurrently and
    * share one agent and session manager; coordinate turns between themselves. A

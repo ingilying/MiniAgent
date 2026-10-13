@@ -10,20 +10,10 @@ import { Agent } from './agent.js'
 import { AgentsManager } from './agents.js'
 import { type AppConfig, loadConfig } from './config.js'
 import { Context } from './context.js'
-import {
-  Logger,
-  FileSink,
-  StreamSink,
-  parseLogLevel,
-  type LogLevel,
-  type LogSink,
-} from './logger.js'
-import { basicToolsPlugin } from './plugins/basic-tools.js'
-import { deepseekPlugin } from './plugins/deepseek.js'
-import { loadPlugins } from './plugins/loader.js'
-import type { Plugin } from './plugins/types.js'
+import { PluginManager } from './plugins/manager.js'
+import type { Plugin, PluginHost, RunHost } from './plugins/types.js'
 import { loadProviders } from './providers.js'
-import type { Providers, ProviderOptions } from './providers.js'
+import type { Providers } from './providers.js'
 import { SessionManager } from './sessions.js'
 import { FileContextStore } from './store.js'
 import { defaultLogger, renameFinishedLog } from './logger.js'
@@ -177,12 +167,16 @@ export class App {
   agent: Agent | undefined
 
   providers: Providers | undefined
+  /** Plugins plus the phases to drive them. */
+  private readonly pluginManager: PluginManager
   /** Live tool set merged from built-ins and plugins. */
   tools: ToolSet
   /** System prompt parts: base prompt first, plugin parts after in load order. */
   systemPromptParts: string[]
   /** Loaded plugins in load order, built-ins first. */
-  plugins: Plugin[]
+  get plugins(): Plugin[] {
+    return this.pluginManager.plugins
+  }
 
   constructor(options: AppOptions = {}) {
     this.args = options.args ?? process.argv.slice(2)
@@ -197,6 +191,10 @@ export class App {
     this.latestFile = chosen.latestFile
     this.logger = this.root.child({ module: 'app' })
     this.injectedAgent = options.agent
+    this.pluginManager = new PluginManager({
+      dataDirectory: this.dataDirectory,
+      logger: this.logger,
+    })
     this.catalogUrl = options.catalogUrl
     this.version = VERSION
     this.defaultProvider = options.defaultProvider ?? DEFAULT_PROVIDER
@@ -206,7 +204,6 @@ export class App {
     this.configFile = options.configFile ?? join(this.dataDirectory, 'config.json')
     this.tools = {}
     this.systemPromptParts = [SYSTEM_PROMPT]
-    this.plugins = []
   }
 
   /**
@@ -289,36 +286,24 @@ export class App {
   ): Promise<number> {
     const providerId = context.providerId
     const modelId = context.modelId ?? this.defaultModel
-    const settings = this.providerSettings(config)
-    let plugins: Plugin[]
+    const settings = { ...config.providers }
+    const plugins = this.pluginManager
     try {
-      plugins = await loadPlugins(config.plugins ?? [], this.dataDirectory)
+      await plugins.load(config.plugins ?? [])
     } catch (error) {
       this.logger.error(error instanceof Error ? error.message : String(error))
       return 1
     }
-    const allPlugins = [deepseekPlugin, basicToolsPlugin, ...plugins]
-    this.plugins = allPlugins
-    this.logger.debug(`[plugin] loaded: ${allPlugins.map((plugin) => plugin.name).join(', ')}`)
 
     try {
-      this.providers = loadProviders()
+      const providers = loadProviders()
+      this.providers = providers
+      await plugins.execute((plugin) =>
+        plugin.onProvidersCreating?.(providers, config.pluginConfig?.[plugin.name]),
+      )
+      providers.loadConfig(settings)
 
-      for (const plugin of allPlugins) {
-        if (plugin.onProvidersCreating !== undefined) {
-          try {
-            await plugin.onProvidersCreating(this.providers, config.pluginConfig?.[plugin.name])
-          } catch (error) {
-            throw new Error(`Plugin "${plugin.name}" failed: ${pluginError(error)}`, {
-              cause: error,
-            })
-          }
-        }
-      }
-
-      this.providers.loadConfig(settings)
-
-      const host = {
+      const host: PluginHost = {
         tools: this.tools,
         providers,
         systemPromptParts: this.systemPromptParts,
@@ -327,32 +312,9 @@ export class App {
         modelId,
         context,
         sessions: manager,
-        logger: this.logger,
+        logger: this.root.child({ module: 'plugin' }),
       }
-      for (const plugin of allPlugins) {
-        try {
-          await plugin.setup?.(host, config.pluginConfig?.[plugin.name])
-        } catch (error) {
-          throw new Error(`Plugin "${plugin.name}" failed: ${pluginError(error)}`, {
-            cause: error,
-          })
-        }
-      }
-      for (const plugin of allPlugins) {
-        if (plugin.systemPrompt === undefined) {
-          continue
-        }
-        try {
-          const part = await plugin.systemPrompt()
-          if (part !== undefined && part.length > 0) {
-            this.systemPromptParts.push(part)
-          }
-        } catch (error) {
-          throw new Error(`Plugin "${plugin.name}" failed: ${pluginError(error)}`, {
-            cause: error,
-          })
-        }
-      }
+      await plugins.execute((plugin) => plugin.setup?.(host, config.pluginConfig?.[plugin.name]))
       for (const [name, entry] of Object.entries(config.tools ?? {})) {
         if (entry.enabled === false) {
           delete this.tools[name]
@@ -385,34 +347,23 @@ export class App {
     // The built agent serves the boot session; `agentFor` builds more for
     // other sessions. A frontend (TUI, WebUI) drives the agents here. No
     // `run` methods means headless: return as before.
-    const runners = allPlugins.filter((plugin) => plugin.run !== undefined)
     try {
-      await Promise.all(
-        runners.map(async (plugin) => {
-          try {
-            await (plugin.run as NonNullable<Plugin['run']>)(
-              {
-                agent: this.agent as Agent,
-                agentFor: (session: Context): Agent => this.agentFor(session),
-                agents,
-                context,
-                prompt: this.prompt,
-                sessionId: this.sessionId,
-                providerId,
-                modelId,
-                tools: this.tools,
-                dataDirectory: this.dataDirectory,
-                sessions: manager,
-                logger: this.logger,
-              },
-              config.pluginConfig?.[plugin.name],
-            )
-          } catch (error) {
-            throw new Error(`Plugin "${plugin.name}" failed: ${pluginError(error)}`, {
-              cause: error,
-            })
-          }
-        }),
+      const runHost: RunHost = {
+        agent: this.agent as Agent,
+        agentFor: (session: Context): Agent => this.agentFor(session),
+        agents,
+        context,
+        prompt: this.prompt,
+        sessionId: this.sessionId,
+        providerId,
+        modelId,
+        tools: this.tools,
+        dataDirectory: this.dataDirectory,
+        sessions: manager,
+        logger: this.root.child({ module: 'plugin' }),
+      }
+      await plugins.executeAll((plugin) =>
+        plugin.run?.(runHost, config.pluginConfig?.[plugin.name]),
       )
     } catch (error) {
       this.logger.error(error instanceof Error ? error.message : String(error))
@@ -470,18 +421,6 @@ export class App {
       catalogUrl: this.catalogUrl,
       logger: this.root.child({ module: 'sessions' }),
     })
-  }
-
-  /**
-   * Per-provider settings for the registry: the config file's `providers`
-   * block. Environment variables stay with the AI SDK.
-   */
-  private providerSettings(config: AppConfig): Record<string, ProviderOptions> {
-    const settings: Record<string, ProviderOptions> = Object.create(null)
-    for (const [id, entry] of Object.entries(config.providers ?? {})) {
-      settings[id] = { apiKey: entry.apiKey, baseURL: entry.baseURL }
-    }
-    return settings
   }
 
   private buildAgent(

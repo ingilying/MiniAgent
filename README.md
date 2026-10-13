@@ -371,9 +371,7 @@ export default {
   },
   setup(host, config) {
     host.tools.greet = greetTool
-  },
-  systemPrompt() {
-    return 'Be brief.'
+    host.systemPromptParts.push('Be brief.')
   },
   async run(host, config) {
     // runs after the agent is built, concurrently with other plugins'

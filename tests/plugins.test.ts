@@ -206,8 +206,7 @@ describe('App plugins', () => {
       join(directory, 'greeter.mjs'),
       `export default {
         name: 'greeter',
-        setup(host) { host.tools.read = undefined; host.tools.added = { kind: 'stub' }; },
-        systemPrompt() { return 'Be brief.'; },
+        setup(host) { host.tools.read = undefined; host.tools.added = { kind: 'stub' }; host.systemPromptParts.push('Be brief.'); },
       };`,
       'utf8',
     )
