@@ -127,15 +127,21 @@ describe('loadConfig', () => {
     expect(await loadConfig(configPath())).toEqual({})
   })
 
-  it('ignores a non-object document', async () => {
+  it('throws on a non-object document', async () => {
     await writeFile(configPath(), JSON.stringify(['nope']), 'utf8')
 
-    expect(await loadConfig(configPath())).toEqual({})
+    await expect(loadConfig(configPath())).rejects.toThrow(/expected object/i)
   })
 
   it('throws on invalid JSON', async () => {
     await writeFile(configPath(), '{ not json', 'utf8')
 
     await expect(loadConfig(configPath())).rejects.toThrow(/invalid JSON/)
+  })
+
+  it('keeps a tool entry without an explicit flag as enabled', async () => {
+    await writeFile(configPath(), JSON.stringify({ tools: { read: {} } }), 'utf8')
+
+    expect(await loadConfig(configPath())).toEqual({ tools: { read: {} } })
   })
 })

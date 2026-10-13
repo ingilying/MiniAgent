@@ -59,7 +59,8 @@ export interface ProviderConfig {
 /**
  * Reads the config file. Returns an empty config when the file does not exist
  * and throws when it exists but cannot be parsed, so a broken file is reported
- * rather than silently ignored.
+ * rather than silently ignored. Entries with the wrong shape are dropped
+ * field by field; the caller reports the failure.
  */
 export async function loadConfig(path: string): Promise<AppConfig> {
   let raw: string
@@ -79,8 +80,7 @@ export async function loadConfig(path: string): Promise<AppConfig> {
     throw new Error(`invalid JSON in ${path}`)
   }
 
-  const result = appConfigSchema.safeParse(parsed)
-  return result.success ? result.data : {}
+  return appConfigSchema.parse(parsed)
 }
 
 const nonEmptyText = z.string().min(1)
@@ -93,7 +93,7 @@ const providerConfigSchema = z
   .refine((entry) => entry.baseURL !== undefined || entry.apiKey !== undefined)
 
 const toolConfigSchema = z.object({
-  enabled: z.boolean(),
+  enabled: z.boolean().optional(),
 })
 
 /** One bad entry skips itself instead of failing the whole block. */
