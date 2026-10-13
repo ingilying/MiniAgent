@@ -95,8 +95,17 @@ export class Providers {
 
   /** Replaces the provider under one id in the registry: remove, then insert. */
   private insert(id: string, provider: Provider): void {
+    const previous = this.registry.providers[id]
     delete this.registry.providers[id]
-    this.registry.registerProvider({ id, provider })
+    try {
+      this.registry.registerProvider({ id, provider })
+    } catch (error) {
+      // Never leave the id empty: put the previous provider back, if any.
+      if (previous !== undefined) {
+        this.registry.registerProvider({ id, provider: previous })
+      }
+      throw error
+    }
   }
 }
 
