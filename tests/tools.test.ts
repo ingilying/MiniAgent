@@ -45,6 +45,16 @@ describe('readTool', () => {
       readTool.execute({ path: join(directory, 'missing.txt') }, toolExecutionOptions),
     ).rejects.toThrow()
   })
+
+  it('truncates files beyond the character cap', async () => {
+    const path = join(directory, 'big.txt')
+    await writeFile(path, `${'x'.repeat(100_001)}\nlast`, 'utf8')
+
+    const output = await readTool.execute({ path }, toolExecutionOptions)
+
+    expect(output).toMatchObject({ lines: 2, truncated: true })
+    expect((output as { content: string }).content).toHaveLength(100_000)
+  })
 })
 
 describe('writeTool', () => {
@@ -133,5 +143,15 @@ describe('shellTool', () => {
         toolExecutionOptions,
       ),
     ).rejects.toThrow(/timed out/)
+  })
+
+  it('truncates huge output instead of returning it whole', async () => {
+    const output = await shellTool.execute(
+      { command: `node -e "process.stdout.write('y'.repeat(300000))"`, workdir: directory },
+      toolExecutionOptions,
+    )
+
+    expect(output).toMatchObject({ exitCode: 0, truncated: true })
+    expect((output as { stdout: string }).stdout).toHaveLength(50_000)
   })
 })

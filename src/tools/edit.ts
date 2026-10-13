@@ -1,7 +1,10 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 
 import { tool } from 'ai'
 import { z } from 'zod'
+
+/** Files larger than this are refused: the whole file is read to edit it. */
+export const MAX_EDIT_BYTES = 10 * 1024 * 1024
 
 export const editTool = tool({
   description:
@@ -18,6 +21,12 @@ export const editTool = tool({
       .describe('Replace every occurrence. Defaults to false (exactly one expected).'),
   }),
   execute: async ({ path, oldString, newString, replaceAll }) => {
+    const size = (await stat(path)).size
+    if (size > MAX_EDIT_BYTES) {
+      throw new Error(
+        `File ${path} is ${(size / 1024 / 1024).toFixed(1)} MB; refusing to edit it whole.`,
+      )
+    }
     const content = await readFile(path, 'utf8')
     const occurrences = content.split(oldString).length - 1
     if (occurrences === 0) {

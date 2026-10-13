@@ -6,11 +6,25 @@ import { z } from 'zod'
 
 const execAsync = promisify(exec)
 
+/** Output streams beyond this are truncated, so one command cannot eat the window. */
+export const MAX_SHELL_CHARS = 100_000
+
 interface ExecFailure extends Error {
   code?: number | null
   killed?: boolean
   stdout?: string
   stderr?: string
+}
+
+function capped(
+  stdout: string,
+  stderr: string,
+): { stdout: string; stderr: string; truncated?: true } {
+  if (stdout.length + stderr.length <= MAX_SHELL_CHARS) {
+    return { stdout, stderr }
+  }
+  const half = Math.floor(MAX_SHELL_CHARS / 2)
+  return { stdout: stdout.slice(0, half), stderr: stderr.slice(0, half), truncated: true }
 }
 
 export const shellTool = tool({
@@ -42,7 +56,7 @@ export const shellTool = tool({
         maxBuffer: 10 * 1024 * 1024,
         windowsHide: true,
       })
-      return { command, exitCode: 0, stdout, stderr }
+      return { command, exitCode: 0, ...capped(stdout, stderr) }
     } catch (error) {
       const failure = error as ExecFailure
       if (failure.killed === true) {
@@ -51,8 +65,7 @@ export const shellTool = tool({
       return {
         command,
         exitCode: failure.code ?? 1,
-        stdout: failure.stdout ?? '',
-        stderr: failure.stderr ?? String(error),
+        ...capped(failure.stdout ?? '', failure.stderr ?? String(error)),
       }
     }
   },
