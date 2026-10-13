@@ -192,7 +192,7 @@ export class App {
     this.injectedAgent = options.agent
     this.pluginManager = new PluginManager({
       dataDirectory: this.dataDirectory,
-      logger: this.logger,
+      logger: this.root.child({ module: 'plugin-manager' }),
     })
     this.catalogUrl = options.catalogUrl
     this.version = VERSION
@@ -305,6 +305,7 @@ export class App {
         providers,
         systemPromptParts: this.systemPromptParts,
         dataDirectory: this.dataDirectory,
+        cwd: this.cwd,
         providerId,
         modelId,
         context,
@@ -356,6 +357,7 @@ export class App {
         modelId,
         tools: this.tools,
         dataDirectory: this.dataDirectory,
+        cwd: this.cwd,
         sessions: manager,
         logger: this.root.child({ module: 'plugin' }),
       }

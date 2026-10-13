@@ -1,7 +1,8 @@
 import type { Logger } from 'pino'
 
-import { basicToolsPlugin } from './basic-tools.js'
+import { basicToolsPlugin } from './basic-tools/index.js'
 import { deepseekPlugin } from './deepseek.js'
+import { tuiPlugin } from './tui/index.js'
 import { loadPlugins } from './loader.js'
 import type { Plugin } from './types.js'
 
@@ -29,7 +30,7 @@ export class PluginManager {
   async load(specifiers: readonly string[]): Promise<void> {
     const loaded = await loadPlugins(specifiers, this.dataDirectory)
     this.plugins.length = 0
-    this.plugins.push(deepseekPlugin, basicToolsPlugin, ...loaded)
+    this.plugins.push(deepseekPlugin, basicToolsPlugin, tuiPlugin, ...loaded)
     this.logger.info(`loaded: ${this.plugins.map((plugin) => plugin.name).join(', ')}`)
   }
 

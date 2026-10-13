@@ -1,12 +1,80 @@
 import pino, { type Logger } from 'pino'
+import pretty from 'pino-pretty'
 import { dirname, join } from 'node:path'
 import { renameSync, rmSync } from 'node:fs'
+
+type Tee = ReturnType<typeof pino.multistream>
+
+/**
+ * Human-readable console stream. Writes pretty logs to `process.stdout`
+ * (passed as the object, so stdout captures keep working); the log file
+ * destinations below keep raw JSON. Shared across loggers so repeated
+ * instantiation does not pile listeners onto `process.stdout`.
+ */
+let sharedConsole: ReturnType<typeof pretty> | undefined
+function consoleStream(): ReturnType<typeof pretty> {
+  sharedConsole ??= pretty({ translateTime: 'SYS:standard', destination: process.stdout })
+  return sharedConsole
+}
+
+/**
+ * Whether new loggers still tee to the console. The TUI plugin closes the
+ * console stream while it owns the screen (see `setConsoleEnabled`); Ink
+ * cannot intercept raw `stdout` writes, so they would corrupt its frames.
+ * The file tee keeps every line either way.
+ */
+let consoleEnabled = true
+
+/** Live tee destinations, so the console stream detaches from all of them at once. */
+const liveTees: Tee[] = []
+
+/**
+ * Closes the shared console stream (`false`) or attaches a fresh one
+ * (`true`) on every live logger. File logging is unaffected: nothing is
+ * lost, it just stops reaching the screen while closed.
+ */
+export function setConsoleEnabled(enabled: boolean): void {
+  consoleEnabled = enabled
+  if (enabled) {
+    const fresh = consoleStream()
+    for (const tee of liveTees) {
+      if (!tee.streams.some((entry) => entry.stream === fresh)) {
+        tee.add(fresh)
+      }
+    }
+    return
+  }
+  for (const tee of liveTees) {
+    const id = consoleEntryId(tee)
+    if (id !== undefined) {
+      tee.remove(id)
+    }
+  }
+  sharedConsole?.end()
+  sharedConsole = undefined
+}
+
+/** Runtime id pino assigns each tee entry; the public types omit it. */
+function consoleEntryId(tee: Tee): number | undefined {
+  const entry = tee.streams.find((candidate) => candidate.stream === sharedConsole)
+  return (entry as unknown as { id?: number } | undefined)?.id
+}
+
+/** Builds a tee destination and registers it for console detach. */
+function teeDestination(file: { dest: string; mkdir: boolean; sync: boolean }): Tee {
+  const tee = consoleEnabled
+    ? pino.multistream([consoleStream(), pino.destination(file)])
+    : pino.multistream([pino.destination(file)])
+  liveTees.push(tee)
+  return tee
+}
 
 /**
  * Builds the default diagnostics logger: the log file when configured,
  * else a tee of the console and `<dataDirectory>/log/latest.log`, restarted
  * every run. The latest file is renamed to the finish time at the end of
- * the run (see `renameFinishedLog`).
+ * the run (see `renameFinishedLog`). The console gets pretty
+ * human-readable output; files keep newline-delimited JSON.
  */
 export function defaultLogger(
   dataDirectory: string,
@@ -18,12 +86,7 @@ export function defaultLogger(
   const file = logFile ?? env.MINIAGENT_LOG_FILE
   if (file !== undefined) {
     return {
-      logger: pino({ level },
-        pino.multistream([
-          process.stdout,
-          pino.destination({ dest: file, mkdir: true, sync: true }),
-        ]),
-      ),
+      logger: pino({ level }, teeDestination({ dest: file, mkdir: true, sync: true })),
       latestFile: undefined,
     }
   }
@@ -36,10 +99,7 @@ export function defaultLogger(
   return {
     logger: pino(
       { level, base: undefined },
-      pino.multistream([
-        process.stdout,
-        pino.destination({ dest: latest, mkdir: true, sync: true }),
-      ]),
+      teeDestination({ dest: latest, mkdir: true, sync: true }),
     ),
     latestFile: latest,
   }

@@ -24,6 +24,8 @@ export interface PluginHost {
   systemPromptParts: string[]
   /** Directory holding sessions, the config file, and the model cache. */
   readonly dataDirectory: string
+  /** Project directory the session history is scoped to. */
+  readonly cwd: string
   /** Provider id the session runs on. */
   readonly providerId: string
   /** Model id the session runs on. */
@@ -71,6 +73,8 @@ export interface RunHost {
   tools: ToolSet
   /** Directory holding sessions, the config file, and the model cache. */
   readonly dataDirectory: string
+  /** Project directory the session history is scoped to. */
+  readonly cwd: string
   /** Sessions open in this process plus the history of the directory. */
   readonly sessions: SessionManager
   /** Application diagnostics. Prefer it over `console`. */

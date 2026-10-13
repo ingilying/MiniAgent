@@ -88,6 +88,11 @@ describe('PluginManager.load', () => {
 
     await target.load(['./mine.mjs'])
 
-    expect(target.plugins.map((plugin) => plugin.name)).toEqual(['deepseek', 'basic-tools', 'mine'])
+    expect(target.plugins.map((plugin) => plugin.name)).toEqual([
+      'deepseek',
+      'basic-tools',
+      'tui',
+      'mine',
+    ])
   })
 })

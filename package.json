@@ -10,6 +10,7 @@
     "postinstall": "node scripts/build-info.mjs",
     "build": "pnpm build-info && tsc -p tsconfig.build.json",
     "dev": "pnpm build-info && tsx watch src/index.ts",
+    "try": "mkdir -p tmp && cd tmp && tsx ../src/index.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
     "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^10.11.0",
     "eslint-config-prettier": "^10.1.8",
@@ -43,7 +45,10 @@
     "@ai-sdk/openai-compatible": "^3.0.59",
     "ai": "^7.0.116",
     "commander": "^14.0.3",
+    "ink": "^8.0.0",
     "pino": "10.4.0",
+    "pino-pretty": "^13.2.0",
+    "react": "^19.3.0",
     "zod": "^4.6.5"
   }
 }
