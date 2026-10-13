@@ -13,7 +13,7 @@ export function buildCli(version: string = VERSION): Command {
     .name('miniagent')
     .description('Minimal AI agent built on the AI SDK')
     .version(version, '-v, --version', 'output the version number')
-    .option('--log-file <path>', 'append diagnostics to a file instead of stdout/stderr')
+    .option('--log-file <path>', 'tee diagnostics to a file as well as stdout')
     .option('--log-level <level>', 'quietest log level to emit (debug, info, warn, error)')
     .argument('[prompt]', 'initial prompt to send to the agent')
 }

@@ -86,7 +86,9 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(err.text()).toBe('')
-    expect(out.text()).toBe('')
+    const lines = messages(out.text())
+    expect(lines[0]).toBe('loaded: deepseek, basic-tools')
+    expect(lines[1]).toMatch(/^openai\/gpt-6-astra for session /)
   })
 
   it('builds the agent without an API key in the config file', async () => {
@@ -134,7 +136,7 @@ describe('App', () => {
     expect(app.prompt).toBe('what is 17 * 23?')
     expect(app.context?.contextWindow).toBe(1000)
     expect(catalog).not.toHaveBeenCalled()
-    expect(out.text()).toBe('')
+    expect(messages(out.text())).toEqual(['loaded: deepseek, basic-tools'])
   })
 
   it('honours OPENAI_MODEL and MINIAGENT_SESSION', async () => {

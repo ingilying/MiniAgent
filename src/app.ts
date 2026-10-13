@@ -71,7 +71,7 @@ export interface AppOptions {
    */
   logLevel?: string
   /**
-   * File diagnostics go to instead of the console. Falls back to
+   * File diagnostics tee to as well as the console. Falls back to
    * `MINIAGENT_LOG_FILE`. Without either, diagnostics tee to the console
    * and `<dataDirectory>/log/latest.log`, renamed to the finish time when
    * the run ends.

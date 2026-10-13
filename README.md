@@ -41,14 +41,17 @@ OPENAI_MODEL=gpt-6-astra
 MINIAGENT_SESSION=default
 # optional, overrides the context window read from the model catalog
 MINIAGENT_CONTEXT_WINDOW=128000
-# optional, appends diagnostics to a file instead of stdout/stderr
+# optional, tees diagnostics to a file as well as stdout
 MINIAGENT_LOG_FILE=.miniagent/miniagent.log
 # optional, quietest log level emitted (debug, info, warn, error)
 MINIAGENT_LOG_LEVEL=info
 ```
 
 Without `MINIAGENT_LOG_FILE` (or `--log-file`), diagnostics tee to the
-console and `<dataDirectory>/latest.log`, restarted on every run.
+console and `<dataDirectory>/log/latest.log`, renamed to the local finish
+time (`2026-10-12_14-30-00-042.log`) when the run ends. With a log file,
+diagnostics tee to the console and that file instead. A run that logs
+nothing still keeps its (empty) timestamped file.
 
 For a fresh session the config file wins over the environment: provider =
 `config.provider` else `openai`; model = `config.model` else `OPENAI_MODEL` else
@@ -72,7 +75,7 @@ miniagent [options] [prompt]
 
 Options:
   -v, --version       output the version number
-  --log-file <path>   append diagnostics to a file instead of stdout/stderr
+  --log-file <path>   tee diagnostics to a file as well as stdout
   --log-level <level> quietest log level to emit (debug, info, warn, error)
   -h, --help          display help for command
 ```
@@ -118,7 +121,8 @@ with its settings. Any other id becomes an OpenAI-compatible provider built
 from its settings. Adding another built-in is one create function in the
 constructor.
 
-It prints the `[model] ...` context-window diagnostics as it resolves them, and
+It prints the context-window diagnostics as it resolves them (tagged with
+`module: 'app'` in the log line), and
 returns exit code `1` when the provider is unknown or its settings are
 rejected. The
 model cache, the config file, and any persisted sessions live in
