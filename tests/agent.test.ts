@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Agent, type AgentEvent, type AgentOutputEvent } from '../src/agent.js'
 import { Context } from '../src/context.js'
 import pino from 'pino'
-import { writeTool } from '../src/tools/write.js'
+import { writeTool } from '../src/plugins/basic-tools/write.js'
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },

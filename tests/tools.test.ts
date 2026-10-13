@@ -4,10 +4,10 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { editTool } from '../src/tools/edit.js'
-import { readTool } from '../src/tools/read.js'
-import { shellTool } from '../src/tools/shell.js'
-import { writeTool } from '../src/tools/write.js'
+import { editTool } from '../src/plugins/basic-tools/edit.js'
+import { readTool } from '../src/plugins/basic-tools/read.js'
+import { shellTool } from '../src/plugins/basic-tools/shell.js'
+import { writeTool } from '../src/plugins/basic-tools/write.js'
 
 const toolExecutionOptions = { toolCallId: 'test', messages: [], context: {} }
 

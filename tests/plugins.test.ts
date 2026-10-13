@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Agent } from '../src/agent.js'
 import { App } from '../src/app.js'
 import { loadPlugins } from '../src/plugins/loader.js'
-import { readTool } from '../src/tools/read.js'
+import { readTool } from '../src/plugins/basic-tools/read.js'
 import pino from 'pino'
 
 const usage = {

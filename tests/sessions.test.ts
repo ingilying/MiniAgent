@@ -483,7 +483,7 @@ describe('App multi-session', () => {
     const logged = raw.map((line) => JSON.parse(line) as { module?: string; msg: string })
     const moduleOf = (fragment: string): string | undefined =>
       logged.find((line) => line.msg.includes(fragment))?.module
-    expect(moduleOf('loaded:')).toBe('app')
+    expect(moduleOf('loaded:')).toBe('plugin-manager')
     expect(moduleOf(`created ${app.sessionId}`)).toBe('sessions')
     expect(moduleOf('for session')).toBe('app')
     // One module key per line: nested same-key children would print it twice.

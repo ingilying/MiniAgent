@@ -316,9 +316,9 @@ size before the next run.
 
 ### Tools
 
-Tools live in `src/tools/` and are plain AI SDK `tool()` definitions with zod
-`inputSchema`s. The basic-tools plugin
-([src/plugins/basic-tools.ts](src/plugins/basic-tools.ts)) registers them:
+Tools live in the basic-tools plugin (`src/plugins/basic-tools/`) and are
+plain AI SDK `tool()` definitions with zod `inputSchema`s. The plugin's
+`index.ts` registers them:
 
 - `read` — read a text file, optionally a line slice (offset/limit)
 - `write` — create or overwrite a text file, creating parent directories
@@ -438,15 +438,15 @@ pnpm test
 │   │   ├── types.ts
 │   │   ├── loader.ts
 │   │   ├── deepseek.ts      # DeepSeek provider factory + plugin
-│   │   └── basic-tools.ts    # read + write + edit + shell plugin
+│   │   └── basic-tools/     # read + write + edit + shell plugin
+│   │       ├── index.ts
+│   │       ├── read.ts
+│   │       ├── write.ts
+│   │       ├── edit.ts
+│   │       └── shell.ts
 │   ├── providers.ts       # provider table (openai, anthropic, google, compatible)
 │   ├── store.ts           # ContextStore interface + FileContextStore
 │   ├── index.ts           # entry point (boots the CLI)
-│   └── tools/             # tool definitions
-│       ├── read.ts
-│       ├── write.ts
-│       ├── edit.ts
-│       └── shell.ts
 ├── scripts/
 │   └── build-info.mjs     # writes src/build-info.ts from the environment
 ├── tests/                 # Vitest tests (mock language model, no network)
