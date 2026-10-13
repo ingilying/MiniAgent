@@ -224,20 +224,22 @@ describe('SessionManager', () => {
     expect(text).toContain('shutdown: 1 saved, 0 pruned')
   })
 
-  it('drives several sessions through one agent at the same time', async () => {
+  it('drives several sessions through one agent per session at the same time', async () => {
     const manager = await managerFor(projectA)
     const first = await manager.createSession()
     const second = await manager.createSession()
-    first.addUser('question-one')
-    second.addUser('question-two')
 
-    // One agent, bound to the first session by default, yet both sessions
-    // run concurrently: the conversation travels with the per-call input.
-    const agent = new Agent({ model: echoModel(), context: first })
-    const [one, two] = await Promise.all([agent.run(first), agent.run(second)])
+    // One agent per session: each agent is bound to its own conversation and
+    // both runs proceed concurrently.
+    const one = new Agent({ model: echoModel(), context: first })
+    const two = new Agent({ model: echoModel(), context: second })
+    const [firstResult, secondResult] = await Promise.all([
+      one.run('question-one'),
+      two.run('question-two'),
+    ])
 
-    expect(one.text).toBe('echo: question-one')
-    expect(two.text).toBe('echo: question-two')
+    expect(firstResult.text).toBe('echo: question-one')
+    expect(secondResult.text).toBe('echo: question-two')
     expect(first.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
     expect(second.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
 

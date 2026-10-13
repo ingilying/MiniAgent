@@ -158,12 +158,7 @@ const agent = new Agent({
   maxSteps: 8, // tool-loop step limit
 })
 
-// With a member context, call it with no input to continue that conversation:
-for await (const event of agent.stream()) {
-  /* ... */
-}
-
-// Or pass input explicitly; a string is added to the member context:
+// Submit prompts; each is added to the member context as a user message:
 for await (const event of agent.stream('What is 6 * 7?')) {
   if (event.type === 'text-delta') process.stdout.write(event.text)
   if (event.type === 'tool-result') console.log(event.output)
@@ -191,16 +186,18 @@ const result = await agent.run('What is 6 * 7?')
 `toolResults`, and `responseMessages` (append the latter to your message
 history to continue a conversation across runs).
 
-Both methods accept either a plain prompt string or a `ModelMessage[]`
-history, and an optional `AbortSignal`. On an `Agent` built with a `context`
-member, calling them with no input continues that conversation, and a string
-input is added to it as a user message.
+Every call takes a prompt string plus an optional `AbortSignal`. Inputs
+queue behind the running one and execute in order; `submit()` enqueues
+without waiting and returns `{ id, done }`, while `subscribe()` taps the
+single output stream of run-tagged events. Without a `context` member
+each run is ephemeral. One agent drives one conversation: build one per
+session (`App.agentFor`) instead of sharing.
 
 ### Context (conversation history)
 
 `src/context.ts` exports a `Context` class that stores the conversation
-history. Pass it as the agent input, or hand it to the `Agent` as its `context`
-member: the current history is sent to the model and the messages generated
+history. Hand it to the `Agent` as its `context` member, then submit
+prompts: the current history is sent to the model and the messages generated
 during the run — including tool calls and tool results — are appended back into
 the context afterwards.
 
@@ -208,20 +205,16 @@ the context afterwards.
 import { Context } from './context.js'
 
 const context = new Context()
-context.addUser('What is 6 * 7?')
-
 const agent = new Agent({ model, context })
 
-// no input: the member context is the conversation
-for await (const event of agent.stream()) {
+for await (const event of agent.stream('What is 6 * 7?')) {
   if (event.type === 'text-delta') process.stdout.write(event.text)
 }
 
 // context.messages: user, assistant (tool call), tool result, assistant (answer)
 
 // next turn sees the full history:
-context.addUser('and in hex?')
-for await (const event of agent.stream()) {
+for await (const event of agent.stream('and in hex?')) {
   /* ... */
 }
 ```
@@ -249,8 +242,8 @@ const context = await Context.load(store, 'user-123')
 const fresh = new Context([], { store })
 console.log(fresh.id) // generated UUID
 
-context.addUser('What is 6 * 7?')
-for await (const event of agent.stream(context)) {
+const agent = new Agent({ model, context })
+for await (const event of agent.stream('What is 6 * 7?')) {
   /* ... */
 }
 // → auto-saved to .miniagent/contexts/user-123.json
@@ -278,8 +271,8 @@ console.log(resumed.messageCount) // history is back
 ### Token counting
 
 Token counts come from the provider — there is no local tokenizer. After every
-run the agent records the usage the model reported for its last step, and the
-context reports it:
+run the agent records the total usage the model reported for the whole run
+(all steps), and the context reports it:
 
 ```ts
 const context = new Context([], { contextWindow: 128_000 })
@@ -434,7 +427,7 @@ pnpm test
 │   ├── cli.ts             # command line (commander): version, help, prompt
 │   ├── config.ts          # config.json (provider, model, api keys)
 │   ├── context.ts         # Context class (history, persistence, tokens)
-│   ├── logger.ts          # Logger class (multi-sink diagnostics: console, file)
+│   ├── logging.ts         # pino setup: destinations, levels, module children
 │   ├── model-info.ts      # model limits from the models.dev catalog
 │   ├── plugins/           # plugin contract + loader + built-in plugins
 │   │   ├── types.ts

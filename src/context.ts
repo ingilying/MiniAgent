@@ -62,16 +62,16 @@ export interface ContextOptions {
  * Conversation history for an agent.
  *
  * A `Context` is the single source of truth for a conversation's messages.
- * Pass it to `Agent.stream()` / `Agent.run()` as the input: the agent sends
- * the current history to the model and, once the run finishes, appends the
- * messages it generated (including tool calls and tool results) back into
- * the context.
+ * Hand it to the `Agent` as its `context` member and submit prompts: the
+ * agent adds each one as a user message, sends the current history to the
+ * model and, once the run finishes, appends the messages it generated
+ * (including tool calls and tool results) back into the context.
  *
  * ```ts
  * const context = new Context()
- * context.addUser('What is 6 * 7?')
+ * const agent = new Agent({ model, context })
  *
- * for await (const event of agent.stream(context)) {
+ * for await (const event of agent.stream('What is 6 * 7?')) {
  *   if (event.type === 'text-delta') process.stdout.write(event.text)
  * }
  *
@@ -85,8 +85,8 @@ export interface ContextOptions {
  * ```ts
  * const store = new FileContextStore('.miniagent/contexts')
  * const context = await Context.load(store, 'user-123')
- * context.addUser('hi')
- * // ... agent.stream(context) — saved by the agent
+ * const agent = new Agent({ model, context })
+ * await agent.run('hi')
  * await context.save() // or save explicitly
  * ```
  *
@@ -143,8 +143,9 @@ export class Context {
   }
 
   /**
-   * Snapshot of the current history. Returning the copy of the array does not
-   * affect the context.
+   * Snapshot of the current history: a fresh array, but the message objects
+   * are shared. Pushing to the array does not affect the context; mutating a
+   * message object does.
    */
   get messages(): readonly ModelMessage[] {
     return [...this.history]
@@ -159,9 +160,9 @@ export class Context {
 
   /**
    * Tokens the conversation took, as reported by the provider for the last
-   * model response: input + output tokens. Cached input tokens are part of
-   * the input total, so they are not added again. `0` until a response has
-   * been recorded.
+   * run: total input + output tokens across all its steps. Cached input tokens
+   * are part of the input total, so they are not added again. `0` until a
+   * response has been recorded.
    */
   get tokenCount(): number {
     return this.lastUsage === undefined
@@ -245,6 +246,17 @@ export class Context {
    */
   clear(): void {
     this.history.length = 0
+  }
+
+  /**
+   * Drops every message past `count`, restoring the history to the length
+   * it had before a failed run added to it. Does nothing when `count`
+   * covers the whole history.
+   */
+  truncate(count: number): void {
+    if (count < this.history.length) {
+      this.history.length = Math.max(0, count)
+    }
   }
 
   /**

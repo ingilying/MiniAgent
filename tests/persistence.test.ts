@@ -33,9 +33,9 @@ function textStream(text: string): MockStreamResult {
   }
 }
 
-async function collectEvents(agent: Agent, context: Context): Promise<AgentEvent[]> {
+async function collectEvents(agent: Agent, input: string): Promise<AgentEvent[]> {
   const events: AgentEvent[] = []
-  for await (const event of agent.stream(context)) {
+  for await (const event of agent.stream(input)) {
     events.push(event)
   }
   return events
@@ -255,9 +255,8 @@ describe('Context persistence', () => {
     })
 
     const context = await Context.load(store, 'session-1', { contextWindow: 1000 })
-    context.addUser('hi')
 
-    const events = await collectEvents(new Agent({ model }), context)
+    const events = await collectEvents(new Agent({ model, context }), 'hi')
     expect(events.at(-1)?.type).toBe('finish')
     expect(context.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
 
@@ -280,9 +279,8 @@ describe('Context persistence', () => {
     })
 
     const context = await Context.load(store, 'session-1', { autoSave: false })
-    context.addUser('hi')
 
-    await collectEvents(new Agent({ model }), context)
+    await collectEvents(new Agent({ model, context }), 'hi')
 
     expect(context.messageCount).toBe(2)
     expect(await store.load('session-1')).toBeUndefined()
