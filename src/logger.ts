@@ -3,13 +3,11 @@ import pretty from 'pino-pretty'
 import { dirname, join } from 'node:path'
 import { renameSync, rmSync } from 'node:fs'
 
-type Tee = ReturnType<typeof pino.multistream>
-
 /**
  * Human-readable console stream. Writes pretty logs to `process.stdout`
- * (passed as the object, so stdout captures keep working); the log file
- * destinations below keep raw JSON. Shared across loggers so repeated
- * instantiation does not pile listeners onto `process.stdout`.
+ * (passed as the object, so stdout captures keep working); log files keep
+ * raw JSON. Shared so repeated instantiation does not pile listeners onto
+ * `process.stdout`.
  */
 let sharedConsole: ReturnType<typeof pretty> | undefined
 function consoleStream(): ReturnType<typeof pretty> {
@@ -17,63 +15,79 @@ function consoleStream(): ReturnType<typeof pretty> {
   return sharedConsole
 }
 
-/**
- * Whether new loggers still tee to the console. The TUI plugin closes the
- * console stream while it owns the screen (see `setConsoleEnabled`); Ink
- * cannot intercept raw `stdout` writes, so they would corrupt its frames.
- * The file tee keeps every line either way.
- */
-let consoleEnabled = true
+function fileDestination(dest: string): pino.DestinationStream {
+  return pino.destination({ dest, mkdir: true, sync: true })
+}
 
-/** Live tee destinations, so the console stream detaches from all of them at once. */
-const liveTees: Tee[] = []
-
-/**
- * Closes the shared console stream (`false`) or attaches a fresh one
- * (`true`) on every live logger. File logging is unaffected: nothing is
- * lost, it just stops reaching the screen while closed.
- */
-export function setConsoleEnabled(enabled: boolean): void {
-  consoleEnabled = enabled
-  if (enabled) {
-    const fresh = consoleStream()
-    for (const tee of liveTees) {
-      if (!tee.streams.some((entry) => entry.stream === fresh)) {
-        tee.add(fresh)
-      }
-    }
-    return
+/** Resolves the file target: explicit file, else `<dataDirectory>/log/latest.log`. */
+function resolveFile(
+  dataDirectory: string,
+  env: NodeJS.ProcessEnv,
+  logFile: string | undefined,
+): { dest: string; latestFile: string | undefined } {
+  const file = logFile ?? env.MINIAGENT_LOG_FILE
+  if (file !== undefined) {
+    return { dest: file, latestFile: undefined }
   }
-  for (const tee of liveTees) {
-    const id = consoleEntryId(tee)
-    if (id !== undefined) {
-      tee.remove(id)
-    }
+  const latest = join(dataDirectory, 'log', 'latest.log')
+  try {
+    rmSync(latest, { force: true })
+  } catch {
+    // A stale log is harmless; the destination appends to it below.
   }
-  sharedConsole?.end()
-  sharedConsole = undefined
+  return { dest: latest, latestFile: latest }
 }
 
-/** Runtime id pino assigns each tee entry; the public types omit it. */
-function consoleEntryId(tee: Tee): number | undefined {
-  const entry = tee.streams.find((candidate) => candidate.stream === sharedConsole)
-  return (entry as unknown as { id?: number } | undefined)?.id
-}
-
-/** Builds a tee destination and registers it for console detach. */
-function teeDestination(file: { dest: string; mkdir: boolean; sync: boolean }): Tee {
-  const tee = consoleEnabled
-    ? pino.multistream([consoleStream(), pino.destination(file)])
-    : pino.multistream([pino.destination(file)])
-  liveTees.push(tee)
-  return tee
+function resolveLevelOption(
+  env: NodeJS.ProcessEnv,
+  logLevel: string | undefined,
+): { level: string; base: undefined } {
+  return { level: resolveLevel(logLevel ?? env.MINIAGENT_LOG_LEVEL), base: undefined }
 }
 
 /**
- * Builds the default diagnostics logger: the log file when configured,
- * else a tee of the console and `<dataDirectory>/log/latest.log`, restarted
- * every run. The latest file is renamed to the finish time at the end of
- * the run (see `renameFinishedLog`). The console gets pretty
+ * Headless logger: console and file together. Multistream only lives here,
+ * the one place two outputs are needed.
+ */
+export function headlessLogger(
+  dataDirectory: string,
+  env: NodeJS.ProcessEnv,
+  logLevel: string | undefined,
+  logFile: string | undefined,
+): { logger: Logger; latestFile: string | undefined } {
+  const { dest, latestFile } = resolveFile(dataDirectory, env, logFile)
+  const logger = pino(
+    {
+      level: resolveLevel(logLevel ?? env.MINIAGENT_LOG_LEVEL),
+    },
+    pino.multistream([consoleStream(), fileDestination(dest)]),
+  )
+  return { logger, latestFile }
+}
+
+/** TUI logger: file only. No multistream, single destination. */
+export function fileLogger(
+  dataDirectory: string,
+  env: NodeJS.ProcessEnv,
+  logLevel: string | undefined,
+  logFile: string | undefined,
+): { logger: Logger; latestFile: string | undefined } {
+  const { dest, latestFile } = resolveFile(dataDirectory, env, logFile)
+  const logger = pino(
+    {
+      level: resolveLevel(logLevel ?? env.MINIAGENT_LOG_LEVEL)
+    },
+    fileDestination(dest),
+  )
+  return { logger, latestFile }
+}
+
+/**
+ * Builds the default diagnostics logger. Headless (no TTY): console and
+ * `<dataDirectory>/log/latest.log` together. TUI (TTY): file only, so raw
+ * `stdout` writes never corrupt Ink frames. The log file when configured
+ * wins in both modes. The latest file is renamed to the finish time at the
+ * end of the run (see `renameFinishedLog`). The console gets pretty
  * human-readable output; files keep newline-delimited JSON.
  */
 export function defaultLogger(
@@ -82,27 +96,10 @@ export function defaultLogger(
   logLevel: string | undefined,
   logFile: string | undefined,
 ): { logger: Logger; latestFile: string | undefined } {
-  const level = resolveLevel(logLevel ?? env.MINIAGENT_LOG_LEVEL)
-  const file = logFile ?? env.MINIAGENT_LOG_FILE
-  if (file !== undefined) {
-    return {
-      logger: pino({ level }, teeDestination({ dest: file, mkdir: true, sync: true })),
-      latestFile: undefined,
-    }
+  if (process.stdout.isTTY === true) {
+    return fileLogger(dataDirectory, env, logLevel, logFile)
   }
-  const latest = join(dataDirectory, 'log', 'latest.log')
-  try {
-    rmSync(latest, { force: true })
-  } catch {
-    // A stale log is harmless; the destination appends to it below.
-  }
-  return {
-    logger: pino(
-      { level, base: undefined },
-      teeDestination({ dest: latest, mkdir: true, sync: true }),
-    ),
-    latestFile: latest,
-  }
+  return headlessLogger(dataDirectory, env, logLevel, logFile)
 }
 
 /**

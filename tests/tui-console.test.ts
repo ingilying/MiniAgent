@@ -4,16 +4,18 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { defaultLogger, setConsoleEnabled } from '../src/logger.js'
+import { defaultLogger, fileLogger, headlessLogger } from '../src/logger.js'
 
 let directory: string
+let originalIsTTY: boolean
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'miniagent-tui-console-'))
+  originalIsTTY = process.stdout.isTTY
 })
 
 afterEach(async () => {
-  setConsoleEnabled(true)
+  process.stdout.isTTY = originalIsTTY
   await rm(directory, { recursive: true, force: true })
 })
 
@@ -35,34 +37,52 @@ async function withCapturedStdout(body: () => void): Promise<string> {
   return captured
 }
 
-describe('console detach', () => {
-  it('closes the console stream while the file tee keeps every line', async () => {
+describe('loggers', () => {
+  it('headless logger writes console and file together', async () => {
+    const file = join(directory, 'headless.log')
+    const { logger } = headlessLogger(directory, {}, 'info', file)
+
+    const shown = await withCapturedStdout(() => {
+      logger.info('hello')
+      logger.flush()
+    })
+
+    expect(shown).toContain('hello')
+    expect(await readFile(file, 'utf8')).toContain('hello')
+  })
+
+  it('file logger writes file only', async () => {
     const file = join(directory, 'tui.log')
-    const { logger } = defaultLogger(directory, {}, 'info', file)
+    const { logger } = fileLogger(directory, {}, 'info', file)
 
-    const before = await withCapturedStdout(() => {
-      logger.info('before')
-      logger.flush()
-    })
-    expect(before).toContain('before')
-
-    setConsoleEnabled(false)
-    const during = await withCapturedStdout(() => {
-      logger.info('during')
-      logger.flush()
-    })
-    setConsoleEnabled(true)
-    const after = await withCapturedStdout(() => {
-      logger.info('after')
+    const shown = await withCapturedStdout(() => {
+      logger.info('hello')
       logger.flush()
     })
 
-    expect(during).not.toContain('during')
-    expect(after).toContain('after')
+    expect(shown).not.toContain('hello')
+    expect(await readFile(file, 'utf8')).toContain('hello')
+  })
 
-    const stored = await readFile(file, 'utf8')
-    expect(stored).toContain('before')
-    expect(stored).toContain('during')
-    expect(stored).toContain('after')
+  it('defaultLogger picks file logger on TTY, headless logger otherwise', async () => {
+    process.stdout.isTTY = true
+    const tuiFile = join(directory, 'default-tui.log')
+    const tuiShown = await withCapturedStdout(() => {
+      const { logger } = defaultLogger(directory, {}, 'info', tuiFile)
+      logger.info('tui line')
+      logger.flush()
+    })
+    expect(tuiShown).not.toContain('tui line')
+    expect(await readFile(tuiFile, 'utf8')).toContain('tui line')
+
+    process.stdout.isTTY = false
+    const headlessFile = join(directory, 'default-headless.log')
+    const headlessShown = await withCapturedStdout(() => {
+      const { logger } = defaultLogger(directory, {}, 'info', headlessFile)
+      logger.info('headless line')
+      logger.flush()
+    })
+    expect(headlessShown).toContain('headless line')
+    expect(await readFile(headlessFile, 'utf8')).toContain('headless line')
   })
 })
