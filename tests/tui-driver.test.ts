@@ -100,10 +100,12 @@ describe('TUI transcript', () => {
     const context = (tokenCount: number, contextWindow?: number): Context =>
       ({ tokenCount, contextWindow }) as Context
 
-    expect(contextUsage(context(0))).toBe('context —')
-    expect(contextUsage(context(950))).toBe('context 950')
-    expect(contextUsage(context(1500, 128000))).toBe('context 1.5k / 128.0k (1%)')
-    expect(contextUsage(context(64000, 128000))).toBe('context 64.0k / 128.0k (50%)')
+    expect(contextUsage(context(0))).toBe('—')
+    expect(contextUsage(context(950))).toBe('950')
+    expect(contextUsage(context(1500, 128000))).toBe('1.5k/128k (1%)')
+    expect(contextUsage(context(64000, 128000))).toBe('64k/128k (50%)')
+    expect(contextUsage(context(0, 1000000))).toBe('0/1M (0%)')
+    expect(contextUsage(context(0, 1050000))).toBe('0/1.1M (0%)')
   })
 
   it('appends command output as system rows', () => {

@@ -194,12 +194,13 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
         </Box>
       )}
       <InputBox input={input} hasTyped={hasTyped} pending={pending} />
-      <Box paddingX={1}>
       {menu.length > 0 && <CandidateMenu items={menu} selected={selected % menu.length} />}
+      <Box paddingX={1} justifyContent="space-between">
         <Text dimColor>
           {contextUsage(host.context)}
           {pending > 0 ? ` · working (${pending})…` : ''}
         </Text>
+        <Text dimColor>{host.context.modelId ?? '?'}</Text>
       </Box>
     </Box>
   )
@@ -212,7 +213,7 @@ function TranscriptRow({ line }: { line: TranscriptLine }): ReactElement {
       return (
         <Box>
           <Text bold color="cyan">
-            {'› '}
+            {'> '}
           </Text>
           <Text>{line.text}</Text>
         </Box>
@@ -289,7 +290,7 @@ function InputBox({
       paddingX={1}
     >
       <Text bold color={pending > 0 ? 'yellow' : '#d97757'}>
-        {'› '}
+        {'> '}
       </Text>
       {input.length > 0 ? (
         <>
