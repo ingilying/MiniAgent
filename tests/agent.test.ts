@@ -115,28 +115,34 @@ describe('Agent', () => {
     expect(model.doStreamCalls).toHaveLength(2)
   })
 
-  it('runs tool calls to completion without streaming', async () => {
+  it('runs tool calls to completion via run()', async () => {
     const file = join(directory, 'note.txt')
     const model = new MockLanguageModelV4({
-      doGenerate: [
+      doStream: [
         {
-          content: [
-            {
-              type: 'tool-call',
-              toolCallId: 'call-1',
-              toolName: 'write',
-              input: JSON.stringify({ path: file, content: 'hello' }),
-            },
-          ],
-          finishReason: { unified: 'tool-calls', raw: undefined },
-          usage,
-          warnings: [],
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: 'call-1',
+                toolName: 'write',
+                input: JSON.stringify({ path: file, content: 'hello' }),
+              },
+              { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: undefined } },
+            ],
+          }),
         },
         {
-          content: [{ type: 'text', text: 'Wrote it.' }],
-          finishReason: { unified: 'stop', raw: undefined },
-          usage,
-          warnings: [],
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: 'Wrote it.' },
+              { type: 'text-end', id: 'text-1' },
+              { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+            ],
+          }),
         },
       ],
     })
@@ -149,8 +155,9 @@ describe('Agent', () => {
       toolName: 'write',
       output: { path: file, bytes: 5 },
     })
-    expect(result.responseMessages.length).toBeGreaterThan(0)
-    expect(model.doGenerateCalls).toHaveLength(2)
+    // Ephemeral run, no context: messages are discarded.
+    expect(result.responseMessages).toHaveLength(0)
+    expect(model.doStreamCalls).toHaveLength(2)
   })
 })
 
@@ -289,12 +296,17 @@ describe('Agent with Context', () => {
 
   it('run() also saves the history', async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: {
-        content: [{ type: 'text', text: 'Hello!' }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage,
-        warnings: [],
-      },
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Hello!' },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
+      }),
     })
 
     const context = new Context()
@@ -314,12 +326,17 @@ describe('Agent with Context', () => {
       },
     })
     const model = new MockLanguageModelV4({
-      doGenerate: {
-        content: [{ type: 'text', text: 'Hello!' }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage,
-        warnings: [],
-      },
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Hello!' },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
+      }),
     })
     const context = new Context()
     const agent = new Agent({
@@ -363,12 +380,17 @@ describe('Agent with Context', () => {
 
   it('adds a string input to the member context', async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: {
-        content: [{ type: 'text', text: 'Hello!' }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage,
-        warnings: [],
-      },
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'Hello!' },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
+      }),
     })
     const context = new Context().addUser('earlier')
     const agent = new Agent({ model, context })
@@ -389,7 +411,7 @@ describe('Agent submit/subscribe', () => {
     let calls = 0
     const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
     const model = new MockLanguageModelV4({
-      doGenerate: async () => {
+      doStream: async () => {
         calls += 1
         const mine = calls
         order.push(`start-${mine}`)
@@ -398,10 +420,15 @@ describe('Agent submit/subscribe', () => {
         }
         order.push(`end-${mine}`)
         return {
-          content: [{ type: 'text', text: `answer-${mine}` }],
-          finishReason: { unified: 'stop', raw: undefined },
-          usage,
-          warnings: [],
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: `answer-${mine}` },
+              { type: 'text-end', id: 'text-1' },
+              { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+            ],
+          }),
         }
       },
     })
@@ -464,16 +491,21 @@ describe('Agent submit/subscribe', () => {
   it('isolates failures with an error event and a result-with-error', async () => {
     let calls = 0
     const model = new MockLanguageModelV4({
-      doGenerate: async () => {
+      doStream: async () => {
         calls += 1
         if (calls === 1) {
           throw new Error('model exploded')
         }
         return {
-          content: [{ type: 'text', text: 'recovered' }],
-          finishReason: { unified: 'stop', raw: undefined },
-          usage,
-          warnings: [],
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: 'recovered' },
+              { type: 'text-end', id: 'text-1' },
+              { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+            ],
+          }),
         }
       },
     })
@@ -501,12 +533,17 @@ describe('Agent submit/subscribe', () => {
 describe('Agent single-flight', () => {
   function textModel(text: string): MockLanguageModelV4 {
     return new MockLanguageModelV4({
-      doGenerate: {
-        content: [{ type: 'text', text }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage,
-        warnings: [],
-      },
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: text },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
+      }),
     })
   }
 
@@ -525,7 +562,7 @@ describe('Agent single-flight', () => {
     let calls = 0
     const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
     const model = new MockLanguageModelV4({
-      doGenerate: async () => {
+      doStream: async () => {
         calls += 1
         const mine = calls
         order.push(`start-${mine}`)
@@ -534,10 +571,15 @@ describe('Agent single-flight', () => {
         }
         order.push(`end-${mine}`)
         return {
-          content: [{ type: 'text', text: `answer-${mine}` }],
-          finishReason: { unified: 'stop', raw: undefined },
-          usage,
-          warnings: [],
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: `answer-${mine}` },
+              { type: 'text-end', id: 'text-1' },
+              { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+            ],
+          }),
         }
       },
     })
@@ -552,7 +594,7 @@ describe('Agent single-flight', () => {
 
   it('drops the pre-added user message when run() fails', async () => {
     const model = new MockLanguageModelV4({
-      doGenerate: async () => {
+      doStream: async () => {
         throw new Error('model exploded')
       },
     })

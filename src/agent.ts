@@ -198,7 +198,7 @@ export class Agent {
       this.queue.push({
         id,
         input,
-        mode: 'run',
+        mode: 'stream',
         abortSignal: options.abortSignal,
         resolve,
         cancelled: false,
@@ -477,84 +477,102 @@ export class Agent {
 
     const reader = result.stream.getReader()
     let reading = true
-    while (reading) {
-      const next = await gate(reader.read())
-      if (next === ABORTED) {
-        break
-      }
-      if (next.done) {
-        break
-      }
-      const part = next.value
-      switch (part.type) {
-        case 'start':
-          this.emit({ type: 'start' }, id)
+    try {
+      while (reading) {
+        const next = await gate(reader.read())
+        if (next === ABORTED) {
           break
-        case 'start-step':
-          this.emit({ type: 'step-start', stepNumber }, id)
+        }
+        if (next.done) {
           break
-        case 'text-delta':
-          text += part.text
-          this.emit({ type: 'text-delta', text: part.text }, id)
-          break
-        case 'reasoning-delta':
-          this.emit({ type: 'reasoning-delta', text: part.text }, id)
-          break
-        case 'tool-call':
-          toolCalls.push({
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            input: part.input,
-          } as TypedToolCall<ToolSet>)
-          this.emit(
-            {
-              type: 'tool-call',
+        }
+        const part = next.value
+        switch (part.type) {
+          case 'start':
+            this.emit({ type: 'start' }, id)
+            break
+          case 'start-step':
+            this.emit({ type: 'step-start', stepNumber }, id)
+            break
+          case 'text-delta':
+            text += part.text
+            this.emit({ type: 'text-delta', text: part.text }, id)
+            break
+          case 'reasoning-delta':
+            this.emit({ type: 'reasoning-delta', text: part.text }, id)
+            break
+          case 'tool-call':
+            toolCalls.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               input: part.input,
-            },
-            id,
-          )
-          break
-        case 'tool-result':
-          toolResults.push({
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            output: part.output,
-          } as TypedToolResult<ToolSet>)
-          this.emit(
-            {
-              type: 'tool-result',
+            } as TypedToolCall<ToolSet>)
+            this.emit(
+              {
+                type: 'tool-call',
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                input: part.input,
+              },
+              id,
+            )
+            break
+          case 'tool-result':
+            toolResults.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               output: part.output,
-            },
-            id,
-          )
-          break
-        case 'finish-step':
-          this.emit(
-            {
-              type: 'step-finish',
-              stepNumber: stepNumber++,
-              finishReason: part.finishReason,
-              usage: part.usage,
-            },
-            id,
-          )
-          break
-        case 'finish':
-          finishReason = part.finishReason
-          usage = part.totalUsage
-          this.emit({ type: 'finish', finishReason: part.finishReason, usage: part.totalUsage }, id)
-          reading = false
-          break
-        case 'error':
-          // Recorded, not emitted: one exit below reports every failure once.
-          streamError = part.error
-          reading = false
-          break
+            } as TypedToolResult<ToolSet>)
+            this.emit(
+              {
+                type: 'tool-result',
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                output: part.output,
+              },
+              id,
+            )
+            break
+          case 'finish-step':
+            this.emit(
+              {
+                type: 'step-finish',
+                stepNumber: stepNumber++,
+                finishReason: part.finishReason,
+                usage: part.usage,
+              },
+              id,
+            )
+            break
+          case 'finish':
+            finishReason = part.finishReason
+            usage = part.totalUsage
+            this.emit(
+              { type: 'finish', finishReason: part.finishReason, usage: part.totalUsage },
+              id,
+            )
+            reading = false
+            break
+          case 'error':
+            // Recorded, not emitted: one exit below reports every failure once.
+            streamError = part.error
+            reading = false
+            break
+        }
       }
+    } catch (error) {
+      // The stream itself failed: roll the pre-added input back and report
+      // once, mirroring the generate path. Cancellation already reported.
+      if (!item.cancelled) {
+        abortSignal?.removeEventListener('abort', noteAborted)
+        fail(error)
+      }
+      try {
+        reader.releaseLock()
+      } catch {
+        // The stream is already gone; abandoning it is the point.
+      }
+      return
     }
     try {
       reader.releaseLock()
@@ -575,17 +593,29 @@ export class Agent {
 
     if (context !== undefined) {
       let settled = false
-      const outcome = await gate(
-        Promise.all([result.responseMessages, result.totalUsage]).then(
-          ([messagesOut, usageOut]): {
-            messagesOut: ModelMessage[]
-            usageOut: LanguageModelUsage
-          } => ({
-            messagesOut,
-            usageOut,
-          }),
-        ),
-      )
+      let outcome: { messagesOut: ModelMessage[]; usageOut: LanguageModelUsage } | typeof ABORTED
+      try {
+        outcome = await gate(
+          Promise.all([result.responseMessages, result.usage]).then(
+            ([messagesOut, usageOut]): {
+              messagesOut: ModelMessage[]
+              usageOut: LanguageModelUsage
+            } => ({
+              messagesOut,
+              usageOut,
+            }),
+          ),
+        )
+      } catch (error) {
+        // Settling replays the stream failure (e.g. a throwing model):
+        // roll the pre-added input back and report once.
+        if (item.cancelled) {
+          return
+        }
+        abortSignal?.removeEventListener('abort', noteAborted)
+        fail(streamError ?? error)
+        return
+      }
       if (outcome !== ABORTED) {
         responseMessages.push(...outcome.messagesOut)
         usage = outcome.usageOut
@@ -615,6 +645,8 @@ export class Agent {
         return
       }
     } else {
+      // Ephemeral run, no context: messages have nowhere to live, discard
+      // them. Usage already arrived on the `finish` part when present.
       abortSignal?.removeEventListener('abort', noteAborted)
       if (streamError !== undefined || abortedFlag) {
         fail(streamError ?? abortError())

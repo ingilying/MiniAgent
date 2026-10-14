@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { Writable } from 'node:stream'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 
 import { Agent } from '../src/agent.js'
@@ -47,13 +48,18 @@ function managerFor(cwd: string): Promise<SessionManager> {
 /** A model that answers with the last user text, so replies stay routable. */
 function echoModel(): MockLanguageModelV4 {
   return new MockLanguageModelV4({
-    doGenerate: (options) => {
+    doStream: (options) => {
       const text = `echo: ${lastUserText(options.prompt)}`
       return Promise.resolve({
-        content: [{ type: 'text', text }],
-        finishReason: { unified: 'stop', raw: undefined },
-        usage,
-        warnings: [],
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: text },
+            { type: 'text-end', id: 'text-1' },
+            { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+          ],
+        }),
       })
     },
   })
