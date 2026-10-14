@@ -54,13 +54,6 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
     host.agent.submit(text)
   }
 
-  useEffect(() => {
-    if (host.prompt !== undefined && host.prompt.length > 0) {
-      submit(host.prompt)
-    }
-    // Once: the boot prompt sends as the first turn.
-  }, [])
-
   useInput((chars, key) => {
     if (key.return) {
       const text = input.trim()

@@ -383,7 +383,6 @@ describe('App plugin run', () => {
         name: 'spy',
         async run(host, config) {
           globalThis.__runHost = {
-            prompt: host.prompt,
             sessionId: host.sessionId,
             providerId: host.providerId,
             modelId: host.modelId,
@@ -399,7 +398,6 @@ describe('App plugin run', () => {
       pluginConfig: { spy: { tag: 'v1' } },
     })
     const app = new App({
-      prompt: 'hello',
       env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile,
@@ -412,7 +410,6 @@ describe('App plugin run', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const seen = (globalThis as any).__runHost
     expect(seen).toMatchObject({
-      prompt: 'hello',
       providerId: 'openai',
       modelId: 'gpt-6-astra',
       hasRead: true,

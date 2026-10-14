@@ -116,7 +116,6 @@ describe('App', () => {
     })
     vi.stubGlobal('fetch', catalog)
     const app = new App({
-      prompt: 'what is 17 * 23?',
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -133,7 +132,6 @@ describe('App', () => {
     expect(app.modelId).toBe('gpt-6-astra')
     expect(app.sessionId).toBeDefined()
     expect(app.sessionId).toBe(app.context?.id)
-    expect(app.prompt).toBe('what is 17 * 23?')
     expect(app.context?.contextWindow).toBe(1000)
     expect(catalog).not.toHaveBeenCalled()
     expect(messages(out.text())).toEqual(['loaded: deepseek, basic-tools, tui'])
@@ -160,7 +158,6 @@ describe('App', () => {
     expect(app.modelId).toBe('gpt-5-nova')
     expect(app.sessionId).toBe('work')
     expect(app.context?.id).toBe('work')
-    expect(app.prompt).toBeUndefined()
   })
 
   it('generates a session id when none is given', async () => {
@@ -183,7 +180,6 @@ describe('App', () => {
 
   it('builds an agent from the provider when none is injected', async () => {
     const app = new App({
-      prompt: 'hi',
       env: { OPENAI_API_KEY: 'test', MINIAGENT_CONTEXT_WINDOW: '1000' },
       envFile: false,
       configFile: false,
@@ -195,7 +191,6 @@ describe('App', () => {
 
     expect(code).toBe(0)
     expect(app.agent).toBeInstanceOf(Agent)
-    expect(app.prompt).toBe('hi')
   })
 
   it('reads the context window from the catalog when there is no override', async () => {

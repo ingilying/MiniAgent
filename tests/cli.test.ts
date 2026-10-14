@@ -31,20 +31,12 @@ describe('CLI', () => {
     }
   })
 
-  it('takes the prompt as the first positional argument', async () => {
-    const { program } = testCli()
-
-    program.parse(['what is 6 * 7?'], { from: 'user' })
-
-    expect(program.args).toEqual(['what is 6 * 7?'])
-  })
-
   it('takes a log file option', () => {
     const { program } = testCli()
 
-    program.parse(['--log-file', 'app.log', 'hello'], { from: 'user' })
+    program.parse(['--log-file', 'app.log'], { from: 'user' })
 
-    expect(program.args).toEqual(['hello'])
+    expect(program.args).toEqual([])
     expect(program.opts().logFile).toBe('app.log')
   })
 

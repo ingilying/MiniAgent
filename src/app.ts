@@ -46,8 +46,6 @@ export function defaultDataDirectory(): string {
 }
 
 export interface AppOptions {
-  /** Initial prompt to send to the agent. Parsed by the CLI, not the app. */
-  prompt?: string
   /**
    * Environment variables used to resolve configuration. Defaults to
    * `process.env`, which the `.env` file is merged into. Pass a different
@@ -145,8 +143,6 @@ export class App {
   /** Version stamped into this build. */
   readonly version: string
 
-  /** Initial prompt to send to the agent. */
-  prompt: string | undefined
   /** Boot session id, resolved by `run()`. A new id per instance unless resumed. */
   sessionId: string | undefined
   /** Provider id, resolved by `run()`. */
@@ -154,8 +150,8 @@ export class App {
   /** Model id, resolved by `run()`. */
   modelId: string | undefined
   /**
-   * Boot session opened by `run()` for this instance: the headless prompt
-   * and the default agent work here. The manager owns all sessions;
+   * Boot session opened by `run()` for this instance: the default agent
+   * works here. The manager owns all sessions;
    * this is just the instance's own handle into it.
    */
   context: Context | undefined
@@ -201,7 +197,6 @@ export class App {
     this.defaultSession = options.defaultSession
     this.envFile = options.envFile ?? join(process.cwd(), '.env')
     this.configFile = options.configFile ?? join(this.dataDirectory, 'config.json')
-    this.prompt = options.prompt
     this.tools = {}
     this.systemPromptParts = [SYSTEM_PROMPT]
   }
@@ -351,7 +346,6 @@ export class App {
         agentFor: (session: Context): Agent => this.agentFor(session),
         agents,
         context,
-        prompt: this.prompt,
         sessionId: this.sessionId,
         providerId,
         modelId,

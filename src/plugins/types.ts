@@ -42,7 +42,7 @@ export interface PluginHost {
  * Narrow view of the app passed to `Plugin.run`, after the agent is built.
  *
  * Everything a frontend needs to drive: the built agent, the conversation,
- * the initial prompt, and the session identity. Read-only except `tools`,
+ * and the session identity. Read-only except `tools`,
  * which `run` may still extend before driving.
  */
 export interface RunHost {
@@ -61,8 +61,6 @@ export interface RunHost {
   agents: AgentsManager
   /** Conversation the agent works on. */
   readonly context: Context
-  /** First positional argument, if any. */
-  readonly prompt: string | undefined
   /** Session id, resolved by `run()`. */
   readonly sessionId: string | undefined
   /** Provider id the session runs on. */
