@@ -8,6 +8,7 @@ import type { ToolSet } from 'ai'
 
 import { Agent } from './agent.js'
 import { AgentsManager } from './agents.js'
+import { CommandRegistry, helpCommand, modelCommand, quitCommand } from './commands.js'
 import { type AppConfig, loadConfig } from './config.js'
 import { Context } from './context.js'
 import { PluginManager } from './plugins/manager.js'
@@ -169,6 +170,8 @@ export class App {
   tools: ToolSet
   /** System prompt parts: base prompt first, plugin parts after in load order. */
   systemPromptParts: string[]
+  /** Core-owned slash commands, exposed to plugins as read-only. */
+  readonly commands: CommandRegistry
   /** Loaded plugins in load order, built-ins first. */
   get plugins(): Plugin[] {
     return this.pluginManager.plugins
@@ -199,6 +202,10 @@ export class App {
     this.configFile = options.configFile ?? join(this.dataDirectory, 'config.json')
     this.tools = {}
     this.systemPromptParts = [SYSTEM_PROMPT]
+    this.commands = new CommandRegistry()
+    this.commands.register(quitCommand)
+    this.commands.register(helpCommand)
+    this.commands.register(modelCommand)
   }
 
   /**
@@ -267,6 +274,44 @@ export class App {
   }
 
   /**
+   * Switches one session to another provider/model: validates by building
+   * the agent first, then updates the session, refreshes its context
+   * window, caches the new agent, and persists the session. Throws for
+   * unknown providers or when called before `run()`. In-flight runs on the
+   * old agent keep their events but lose their subscriber; they still
+   * append to the shared context.
+   */
+  async switchModelFor(
+    session: Context,
+    providerId: string,
+    modelId: string,
+  ): Promise<{
+    agent: Agent
+    providerId: string
+    modelId: string
+    contextWindow: number | undefined
+  }> {
+    if (this.providers === undefined) {
+      throw new Error('App has not run yet: providers are unavailable.')
+    }
+    const agent = this.buildAgent(this.providers, providerId, modelId, session)
+    session.providerId = providerId
+    session.modelId = modelId
+    session.contextWindow = undefined
+    await session.initRemote()
+    this.agents?.set(session, agent)
+    if (session.id === this.sessionId) {
+      this.providerId = providerId
+      this.modelId = modelId
+      this.agent = agent
+    }
+    if (session.store !== undefined) {
+      await session.save()
+    }
+    return { agent, providerId, modelId, contextWindow: session.contextWindow }
+  }
+
+  /**
    * Builds providers, plugins, and the agent, then drives plugin `run`
    * methods. Extracted from `run()` so shutdown logic stays in one place.
    */
@@ -305,6 +350,7 @@ export class App {
         modelId,
         context,
         sessions: manager,
+        commands: this.commands,
         logger: this.root.child({ module: 'plugin' }),
       }
       await plugins.execute((plugin) => plugin.setup?.(host, config.pluginConfig?.[plugin.name]))
@@ -349,10 +395,13 @@ export class App {
         sessionId: this.sessionId,
         providerId,
         modelId,
+        switchModel: (session, sessionProviderId, sessionModelId) =>
+          this.switchModelFor(session, sessionProviderId, sessionModelId),
         tools: this.tools,
         dataDirectory: this.dataDirectory,
         cwd: this.cwd,
         sessions: manager,
+        commands: this.commands,
         logger: this.root.child({ module: 'plugin' }),
       }
       await plugins.executeAll((plugin) =>

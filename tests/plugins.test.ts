@@ -420,6 +420,43 @@ describe('App plugin run', () => {
     delete (globalThis as any).__runHost
   })
 
+  it('switchModel swaps the session agent and persists the model', async () => {
+    await writeFile(
+      join(directory, 'switcher.mjs'),
+      `export default {
+        name: 'switcher',
+        async run(host) {
+          const before = host.agent;
+          const switched = await host.switchModel(host.context, 'openai', 'switched-model');
+          globalThis.__switched = {
+            providerId: switched.providerId,
+            modelId: switched.modelId,
+            window: switched.contextWindow,
+            contextModel: host.context.modelId,
+            agentSwapped: host.agents.get(host.context.id) !== before,
+            agentMatches: host.agents.get(host.context.id) === switched.agent,
+          };
+        },
+      };`,
+      'utf8',
+    )
+    const configFile = await writeConfigFile({ plugins: ['./switcher.mjs'] })
+
+    expect(await appFromFile(configFile).run()).toBe(0)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const switched = (globalThis as any).__switched
+    expect(switched).toMatchObject({
+      providerId: 'openai',
+      modelId: 'switched-model',
+      window: 1000,
+      contextModel: 'switched-model',
+      agentSwapped: true,
+      agentMatches: true,
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (globalThis as any).__switched
+  })
+
   it('fails fast when run throws, naming the plugin', async () => {
     await writeFile(
       join(directory, 'ui-down.mjs'),

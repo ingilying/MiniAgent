@@ -2,19 +2,24 @@ import { useEffect, useRef, useState } from 'react'
 import { Box, Static, Text, useApp, useInput } from 'ink'
 import type { ReactElement } from 'react'
 
+import { join } from 'node:path'
+
 import type { RunHost } from '../types.js'
+import { parseCommand } from '../../commands.js'
+import { listCachedModels } from '../../model-info.js'
 import {
   applyEvent,
+  applyNotice,
   applyUser,
+  commandMenu,
   contextUsage,
   initialTranscript,
+  modelMenu,
+  type MenuItem,
   type TranscriptLine,
   type TranscriptState,
 } from './driver.js'
 import { WelcomeArt, WelcomeBox, titleArt } from './welcome.js'
-
-/** Commands that leave the TUI. */
-const QUIT_COMMANDS = new Set(['/quit', '/exit', ':q'])
 
 /**
  * Claude Code style fullscreen chat: finished turns in `<Static>`, the
@@ -36,35 +41,123 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   const [input, setInput] = useState('')
   const [hasTyped, setHasTyped] = useState(false)
   const [pending, setPending] = useState(0)
+  const [agent, setAgent] = useState(host.agent)
+  const [modelIds, setModelIds] = useState<string[]>([])
+  const [selected, setSelected] = useState(0)
+
+  /** Cached catalog ids for model completion; file cache only, no network. */
+  useEffect(() => {
+    let live = true
+    void listCachedModels(join(host.dataDirectory, 'models.json')).then((ids) => {
+      if (live) {
+        setModelIds(ids)
+      }
+    })
+    return () => {
+      live = false
+    }
+  }, [host.dataDirectory])
+
+  /**
+   * Open menu: command names for a slash prefix, model ids for
+   * `/model <partial>`. Empty everywhere else.
+   */
+  const commandPartial = /^\/(\S*)$/.exec(input)?.[1]
+  const modelPartial = /^\/model\s+(\S*)$/.exec(input)?.[1]
+  const menu: MenuItem[] =
+    commandPartial !== undefined
+      ? commandMenu(host.commands.list(), commandPartial)
+      : modelPartial !== undefined
+        ? modelMenu(modelIds, host.context.providerId, modelPartial)
+        : []
+
+  /** Restart the highlight whenever the menu contents change. */
+  const menuKey = `${commandPartial ?? ''}|${modelPartial ?? ''}|${menu.map((item) => item.label).join(',')}`
+  const lastMenuKey = useRef(menuKey)
+  if (lastMenuKey.current !== menuKey) {
+    lastMenuKey.current = menuKey
+    setSelected(0)
+  }
+  const selectedItem = menu.length === 0 ? undefined : menu[selected % menu.length]
 
   useEffect(
     () =>
-      host.agent.subscribe((event) => {
+      agent.subscribe((event) => {
         setTranscript((previous) => applyEvent(previous, event, makeId))
         if (event.type === 'finish' || event.type === 'error') {
           setPending((count) => Math.max(0, count - 1))
         }
       }),
-    [host.agent],
+    [agent],
   )
 
   const submit = (text: string): void => {
     setTranscript((previous) => applyUser(previous, makeId(), text))
     setPending((count) => count + 1)
-    host.agent.submit(text)
+    agent.submit(text)
+  }
+
+  const notice = (text: string): void => {
+    setTranscript((previous) => applyNotice(previous, makeId(), text))
+  }
+
+  const runCommand = (text: string): void => {
+    setTranscript((previous) => applyUser(previous, makeId(), text))
+    const parsed = parseCommand(text)
+    const command = parsed === undefined ? undefined : host.commands.find(parsed.name)
+    if (parsed === undefined || command === undefined) {
+      notice(`Unknown command "${text}". /help lists commands.`)
+      return
+    }
+    const ctx = {
+      commands: host.commands.list(),
+      current: { providerId: host.context.providerId, modelId: host.context.modelId },
+      quit: (): void => exit(),
+      notice,
+      switchModel: async (
+        providerId: string,
+        modelId: string,
+      ): Promise<{ providerId: string; modelId: string; contextWindow: number | undefined }> => {
+        const switched = await host.switchModel(host.context, providerId, modelId)
+        setAgent(switched.agent)
+        return {
+          providerId: switched.providerId,
+          modelId: switched.modelId,
+          contextWindow: switched.contextWindow,
+        }
+      },
+    }
+    void Promise.resolve(command.run(parsed.args, ctx)).catch((error: unknown) =>
+      notice(error instanceof Error ? error.message : String(error)),
+    )
   }
 
   useInput((chars, key) => {
+    if ((key.upArrow || key.downArrow) && menu.length > 0) {
+      const step = key.downArrow ? 1 : menu.length - 1
+      setSelected((index) => (index + step) % menu.length)
+      return
+    }
+    if (key.tab && selectedItem !== undefined) {
+      setInput(selectedItem.fill)
+      return
+    }
     if (key.return) {
       const text = input.trim()
       if (text.length === 0) {
         return
       }
-      if (QUIT_COMMANDS.has(text)) {
-        exit()
+      // Menu open: Enter selects the highlight into the input box.
+      // Menu closed: Enter sends.
+      if (selectedItem !== undefined) {
+        setInput(selectedItem.fill)
         return
       }
       setInput('')
+      if (text.startsWith('/')) {
+        runCommand(text)
+        return
+      }
       submit(text)
       return
     }
@@ -80,7 +173,7 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       setInput('')
       return
     }
-    if (key.ctrl || key.meta || key.tab) {
+    if (key.ctrl || key.meta) {
       return
     }
     if (chars.length > 0) {
@@ -102,6 +195,7 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       )}
       <InputBox input={input} hasTyped={hasTyped} pending={pending} />
       <Box paddingX={1}>
+      {menu.length > 0 && <CandidateMenu items={menu} selected={selected % menu.length} />}
         <Text dimColor>
           {contextUsage(host.context)}
           {pending > 0 ? ` · working (${pending})…` : ''}
@@ -142,11 +236,36 @@ function TranscriptRow({ line }: { line: TranscriptLine }): ReactElement {
           <Text color="red">{`✖ ${line.text}`}</Text>
         </Box>
       )
+    case 'system':
+      return (
+        <Box>
+          <Text dimColor>{line.text}</Text>
+        </Box>
+      )
     case 'art':
       return <WelcomeArt text={line.text} />
     case 'welcome':
       return <WelcomeBox subtitle={line.text} />
   }
+}
+
+/** Selectable candidate list under the input box; the highlight wraps. */
+function CandidateMenu({ items, selected }: { items: MenuItem[]; selected: number }): ReactElement {
+  return (
+    <Box paddingX={1} flexDirection="column">
+      {items.map((item, index) =>
+        index === selected ? (
+          <Text key={item.label} bold color="cyan">
+            {`❯ ${item.label}${item.hint.length > 0 ? ` — ${item.hint}` : ''}`}
+          </Text>
+        ) : (
+          <Text key={item.label} dimColor>
+            {`  ${item.label}${item.hint.length > 0 ? ` — ${item.hint}` : ''}`}
+          </Text>
+        ),
+      )}
+    </Box>
+  )
 }
 
 /** Claude Code style input: rules above and below, prompt row, no box. */

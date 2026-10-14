@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { fetchModelLimits } from '../src/model-info.js'
+import { fetchModelLimits, listCachedModels } from '../src/model-info.js'
 
 const catalog = {
   openai: {
@@ -175,5 +175,35 @@ describe('fetchModelLimits', () => {
         fetch: failing.fetch,
       }),
     ).rejects.toThrow(/503/)
+  })
+})
+
+describe('listCachedModels', () => {
+  it('lists every provider-qualified id in the disk cache', async () => {
+    const cacheFile = join(directory, 'models.json')
+    await writeFile(
+      cacheFile,
+      JSON.stringify({ url: 'https://example.test/eleven', at: Date.now(), catalog }),
+      'utf8',
+    )
+
+    expect(await listCachedModels(cacheFile)).toEqual([
+      'groq/meta-llama/llama-4-scout-17b-16e-instruct',
+      'openai/gpt-6-astra',
+      'openai/text-embedding-3-small',
+      'xai/grok-4.7',
+    ])
+  })
+
+  it('returns an empty list for a missing or broken cache', async () => {
+    expect(await listCachedModels(join(directory, 'missing.json'))).toEqual([])
+
+    const broken = join(directory, 'broken.json')
+    await writeFile(broken, 'not json', 'utf8')
+    expect(await listCachedModels(broken)).toEqual([])
+
+    const wrongShape = join(directory, 'shape.json')
+    await writeFile(wrongShape, JSON.stringify({ hello: 'world' }), 'utf8')
+    expect(await listCachedModels(wrongShape)).toEqual([])
   })
 })

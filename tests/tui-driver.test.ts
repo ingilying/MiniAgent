@@ -4,10 +4,13 @@ import type { AgentEvent } from '../src/agent.js'
 import type { Context } from '../src/context.js'
 import {
   applyEvent,
+  applyNotice,
   applyUser,
+  commandMenu,
   contextUsage,
   emptyTranscript,
   initialTranscript,
+  modelMenu,
 } from '../src/plugins/tui/driver.js'
 
 function ids(): () => string {
@@ -101,5 +104,51 @@ describe('TUI transcript', () => {
     expect(contextUsage(context(950))).toBe('context 950')
     expect(contextUsage(context(1500, 128000))).toBe('context 1.5k / 128.0k (1%)')
     expect(contextUsage(context(64000, 128000))).toBe('context 64.0k / 128.0k (50%)')
+  })
+
+  it('appends command output as system rows', () => {
+    const makeId = ids()
+    let state = emptyTranscript()
+    state = applyUser(state, makeId(), '/help')
+    state = applyNotice(state, makeId(), 'Available commands:')
+
+    expect(state.lines.map((line) => line.kind)).toEqual(['user', 'system'])
+    expect(state.lines[1]?.text).toBe('Available commands:')
+  })
+
+  it('builds command menu rows by name or alias prefix', () => {
+    const commands = [
+      { name: 'quit', aliases: ['exit', 'q'], description: 'Exit.' },
+      { name: 'help', aliases: ['h', '?'], description: 'Help.' },
+    ]
+
+    expect(commandMenu(commands, '').map((item) => item.label)).toEqual(['/help', '/quit'])
+    expect(commandMenu(commands, 'q')).toEqual([{ label: '/quit', hint: 'Exit.', fill: '/quit ' }])
+    expect(commandMenu(commands, 'QU').map((item) => item.label)).toEqual(['/quit'])
+    expect(commandMenu(commands, 'h').map((item) => item.label)).toEqual(['/help'])
+    expect(commandMenu(commands, 'e').map((item) => item.label)).toEqual(['/quit'])
+    expect(commandMenu(commands, 'zzz')).toEqual([])
+  })
+
+  it('builds model menu rows with the current provider first', () => {
+    const ids = ['openai/gpt-5', 'openai/gpt-6-astra', 'deepseek/deepseek-chat']
+
+    expect(modelMenu(ids, 'openai', '').map((item) => item.label)).toEqual([
+      'openai/gpt-5',
+      'openai/gpt-6-astra',
+      'deepseek/deepseek-chat',
+    ])
+    expect(modelMenu(ids, 'openai', 'gpt').map((item) => item.label)).toEqual([
+      'openai/gpt-5',
+      'openai/gpt-6-astra',
+    ])
+    expect(modelMenu(ids, 'deepseek', 'gpt')).toEqual([
+      { label: 'openai/gpt-5', hint: '', fill: '/model openai/gpt-5 ' },
+      { label: 'openai/gpt-6-astra', hint: '', fill: '/model openai/gpt-6-astra ' },
+    ])
+    expect(modelMenu(ids, 'openai', 'deepseek/')).toEqual([
+      { label: 'deepseek/deepseek-chat', hint: '', fill: '/model deepseek/deepseek-chat ' },
+    ])
+    expect(modelMenu(ids, 'openai', 'zzz')).toEqual([])
   })
 })

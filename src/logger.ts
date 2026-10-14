@@ -38,13 +38,6 @@ function resolveFile(
   return { dest: latest, latestFile: latest }
 }
 
-function resolveLevelOption(
-  env: NodeJS.ProcessEnv,
-  logLevel: string | undefined,
-): { level: string; base: undefined } {
-  return { level: resolveLevel(logLevel ?? env.MINIAGENT_LOG_LEVEL), base: undefined }
-}
-
 /**
  * Headless logger: console and file together. Multistream only lives here,
  * the one place two outputs are needed.

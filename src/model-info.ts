@@ -80,6 +80,33 @@ const cacheEntrySchema = z.object({
 let memoryCache: CacheEntry | undefined
 
 /**
+ * Lists every `provider/id` in the on-disk catalog cache, without touching
+ * the network. Used for model-name completion: breadth matters more than
+ * freshness, so a stale cache still counts. Missing or unreadable files
+ * yield an empty list, never an error.
+ */
+export async function listCachedModels(cacheFile: string): Promise<string[]> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(await readFile(cacheFile, 'utf8'))
+  } catch {
+    return []
+  }
+  const result = cacheEntrySchema.safeParse(parsed)
+  if (!result.success) {
+    return []
+  }
+  const catalog = toCatalog(result.data.catalog)
+  const ids: string[] = []
+  for (const [providerId, provider] of Object.entries(catalog)) {
+    for (const modelId of Object.keys(provider.models ?? {})) {
+      ids.push(`${providerId}/${modelId}`)
+    }
+  }
+  return ids.sort()
+}
+
+/**
  * Looks up a model's limits in the catalog.
  *
  * Returns `undefined` when the catalog does not list the model. Throws when

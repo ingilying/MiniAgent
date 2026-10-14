@@ -2,6 +2,7 @@ import type { ToolSet } from 'ai'
 
 import type { Agent } from '../agent.js'
 import type { AgentsManager } from '../agents.js'
+import type { CommandProvider } from '../commands.js'
 import type { Context } from '../context.js'
 import type { Logger } from 'pino'
 import type { Providers } from '../providers.js'
@@ -34,6 +35,8 @@ export interface PluginHost {
   readonly context: Context
   /** Sessions open in this process plus the history of the directory. */
   readonly sessions: SessionManager
+  /** Core-owned slash commands. Consume only: registration lives in `App`. */
+  readonly commands: CommandProvider
   /** Application diagnostics. Prefer it over `console`. */
   readonly logger: Logger
 }
@@ -67,6 +70,21 @@ export interface RunHost {
   readonly providerId: string | undefined
   /** Model id the session runs on. */
   readonly modelId: string | undefined
+  /**
+   * Switches a session to another provider/model and returns the rebuilt
+   * agent plus the resolved identity. See `App.switchModelFor` for the
+   * full contract. Throws for unknown providers.
+   */
+  switchModel(
+    session: Context,
+    providerId: string,
+    modelId: string,
+  ): Promise<{
+    agent: Agent
+    providerId: string
+    modelId: string
+    contextWindow: number | undefined
+  }>
   /** Live tool set merged from built-ins and plugins. */
   tools: ToolSet
   /** Directory holding sessions, the config file, and the model cache. */
@@ -75,6 +93,8 @@ export interface RunHost {
   readonly cwd: string
   /** Sessions open in this process plus the history of the directory. */
   readonly sessions: SessionManager
+  /** Core-owned slash commands. Consume only: registration lives in `App`. */
+  readonly commands: CommandProvider
   /** Application diagnostics. Prefer it over `console`. */
   readonly logger: Logger
 }
