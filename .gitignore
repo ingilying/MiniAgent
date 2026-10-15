@@ -24,3 +24,6 @@ src/build-info.ts
 
 # Local agent data (persisted conversation contexts)
 .miniagent/
+
+# Command Code local settings and learned preferences
+.commandcode/

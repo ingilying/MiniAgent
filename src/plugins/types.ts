@@ -1,38 +1,35 @@
 import type { ToolSet } from 'ai'
 
-import type { Agent } from '../agent.js'
-import type { AgentsManager } from '../agents.js'
-import type { CommandProvider } from '../commands.js'
-import type { Context } from '../context.js'
+import type { Agent } from '../agent/agent.js'
+import type { AgentsManager } from '../agent/manager.js'
+import type { CommandProvider, ModelSwitch } from '../commands/commands.js'
+import type { Context } from '../session/context.js'
 import type { Logger } from 'pino'
-import type { Providers } from '../providers.js'
-import type { SessionManager } from '../sessions.js'
+import type { Providers } from '../models/providers.js'
+import type { SessionManager } from '../session/manager.js'
+
+/** Outcome of switching a session's model: the new identity plus the rebuilt agent. */
+export type SwitchResult = ModelSwitch & { readonly agent: Agent }
 
 /**
- * Narrow view of the app passed to `Plugin.setup`.
- *
- * Only the live extension points are exposed: the merged tool set, the
- * provider registry, and the system prompt parts. Identity fields are
- * read-only. A plugin mutates `tools`, `providers`, and `systemPromptParts`
- * directly; anything else is out of reach.
+ * Fields every host shares: the live tool set plus the read-only app
+ * identity (directories, sessions, commands, diagnostics).
  */
-export interface PluginHost {
+export interface HostBase {
   /** Live tool set merged into the agent. Mutate in place. */
   tools: ToolSet
-  /** Live provider registry. Call `add` to insert providers. */
-  providers: Providers
-  /** System prompt parts joined with blank lines. Push to append. */
-  systemPromptParts: string[]
+  /**
+   * Merges a group of tools into `host.tools`: each key is assigned in
+   * turn, so a later tool overwrites an earlier one under the same name,
+   * exactly as assigning `host.tools[name]` directly would. `host.tools`
+   * stays the live set, so plugins that mutate it directly keep working;
+   * `addTools` is the recommended way to register tools.
+   */
+  addTools(tools: ToolSet): void
   /** Directory holding sessions, the config file, and the model cache. */
   readonly dataDirectory: string
   /** Project directory the session history is scoped to. */
   readonly cwd: string
-  /** Provider id the session runs on. */
-  readonly providerId: string
-  /** Model id the session runs on. */
-  readonly modelId: string
-  /** Conversation the agent works on. */
-  readonly context: Context
   /** Sessions open in this process plus the history of the directory. */
   readonly sessions: SessionManager
   /** Core-owned slash commands. Consume only: registration lives in `App`. */
@@ -42,13 +39,34 @@ export interface PluginHost {
 }
 
 /**
+ * Narrow view of the app passed to `Plugin.setup`.
+ *
+ * Only the live extension points are exposed: the merged tool set, the
+ * provider registry, and the system prompt parts. Identity fields are
+ * read-only. A plugin mutates `tools`, `providers`, and `systemPromptParts`
+ * directly; anything else is out of reach.
+ */
+export interface PluginHost extends HostBase {
+  /** Live provider registry. Call `add` to insert providers. */
+  providers: Providers
+  /** System prompt parts joined with blank lines. Push to append. */
+  systemPromptParts: string[]
+  /** Provider id the session runs on. */
+  readonly providerId: string
+  /** Model id the session runs on. */
+  readonly modelId: string
+  /** Conversation the agent works on. */
+  readonly context: Context
+}
+
+/**
  * Narrow view of the app passed to `Plugin.run`, after the agent is built.
  *
  * Everything a frontend needs to drive: the built agent, the conversation,
  * and the session identity. Read-only except `tools`,
  * which `run` may still extend before driving.
  */
-export interface RunHost {
+export interface RunHost extends HostBase {
   /** Built agent. Drive it with `run(input)` or `stream(input)`. */
   agent: Agent
   /**
@@ -75,28 +93,7 @@ export interface RunHost {
    * agent plus the resolved identity. See `App.switchModelFor` for the
    * full contract. Throws for unknown providers.
    */
-  switchModel(
-    session: Context,
-    providerId: string,
-    modelId: string,
-  ): Promise<{
-    agent: Agent
-    providerId: string
-    modelId: string
-    contextWindow: number | undefined
-  }>
-  /** Live tool set merged from built-ins and plugins. */
-  tools: ToolSet
-  /** Directory holding sessions, the config file, and the model cache. */
-  readonly dataDirectory: string
-  /** Project directory the session history is scoped to. */
-  readonly cwd: string
-  /** Sessions open in this process plus the history of the directory. */
-  readonly sessions: SessionManager
-  /** Core-owned slash commands. Consume only: registration lives in `App`. */
-  readonly commands: CommandProvider
-  /** Application diagnostics. Prefer it over `console`. */
-  readonly logger: Logger
+  switchModel(session: Context, providerId: string, modelId: string): Promise<SwitchResult>
 }
 
 /**

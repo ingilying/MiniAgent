@@ -1,6 +1,6 @@
 import { Command } from 'commander'
 
-import { App } from './app.js'
+import { App } from './app/app.js'
 import { VERSION } from './build-info.js'
 
 /**

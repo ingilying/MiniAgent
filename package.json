@@ -1,7 +1,7 @@
 {
   "name": "miniagent",
   "version": "0.1.0",
-  "description": "MiniAgent - minimal Node.js + TypeScript project",
+  "description": "MiniAgent - minimal AI agent built on AI SDK Core primitives",
   "type": "module",
   "main": "dist/index.js",
   "private": true,

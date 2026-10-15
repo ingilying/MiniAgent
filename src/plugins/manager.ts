@@ -1,8 +1,8 @@
 import type { Logger } from 'pino'
 
-import { basicToolsPlugin } from './basic-tools/index.js'
-import { deepseekPlugin } from './deepseek.js'
-import { tuiPlugin } from './tui/index.js'
+import { basicToolsPlugin } from './builtin/basic-tools/index.js'
+import { deepseekPlugin } from './builtin/deepseek.js'
+import { tuiPlugin } from './builtin/tui/index.js'
 import { loadPlugins } from './loader.js'
 import type { Plugin } from './types.js'
 
