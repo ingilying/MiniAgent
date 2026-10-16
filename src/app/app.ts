@@ -183,11 +183,7 @@ export class App {
     this.tools = {}
     this.systemPromptParts = [SYSTEM_PROMPT]
     this.commands = new CommandRegistry()
-    this.commands.registerAll([
-      quitCommand,
-      helpCommand,
-      modelCommand
-    ])
+    this.commands.registerAll([quitCommand, helpCommand, modelCommand])
   }
 
   /**

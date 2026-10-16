@@ -88,9 +88,9 @@ export class CommandRegistry implements CommandProvider {
   }
 
   registerAll(commands: Command[]): void {
-    for(const command of commands){
-     this.register(command)
-   }
+    for (const command of commands) {
+      this.register(command)
+    }
   }
 
   /** Looks up a command by name or alias, case-insensitively. */
