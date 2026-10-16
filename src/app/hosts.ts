@@ -1,52 +1,93 @@
+/**
+ * Plugin host builders.
+ *
+ * Assembles the `PluginHost` and `RunHost` objects that plugins receive
+ * during their `setup` and `run` phases. The shared base (`addTools`,
+ * directories, sessions, commands, logger) is built once per phase so
+ * the `run` phase always sees the tools the `setup` phase registered.
+ */
+
 import type { ToolSet } from 'ai'
 import type { Logger } from 'pino'
 
 import type { Agent } from '../agent/agent.js'
 import type { AgentsManager } from '../agent/manager.js'
 import type { CommandProvider } from '../commands/commands.js'
-import type { Context } from '../session/context.js'
 import type { Providers } from '../models/providers.js'
-import type { SessionManager } from '../session/manager.js'
 import type { PluginHost, RunHost, SwitchResult } from '../plugins/types.js'
+import type { Context } from '../session/context.js'
+import type { SessionManager } from '../session/manager.js'
 
-/** Fields every host shares. `App` owns the values; these builders copy them in. */
-export interface SharedHostValues {
-  tools: ToolSet
-  addTools(tools: ToolSet): void
-  dataDirectory: string
-  cwd: string
-  sessions: SessionManager
-  commands: CommandProvider
-  logger: Logger
+/** The identity fields every plugin host phase shares. */
+export interface SharedHostFields {
+  readonly tools: ToolSet
+  readonly dataDirectory: string
+  readonly cwd: string
+  readonly sessions: SessionManager
+  readonly commands: CommandProvider
+  readonly logger: Logger
 }
 
-/** Builds the `setup` host: shared values plus providers and prompt parts. */
+/**
+ * Builds the base host that both `PluginHost` and `RunHost` extend.
+ * `addTools` closes over the shared `tools` set so mutations are
+ * visible to agents built after setup.
+ */
+function buildBase(fields: SharedHostFields) {
+  return {
+    tools: fields.tools,
+    addTools: (tools: ToolSet): void => {
+      Object.assign(fields.tools, tools)
+    },
+    dataDirectory: fields.dataDirectory,
+    cwd: fields.cwd,
+    sessions: fields.sessions,
+    commands: fields.commands,
+    logger: fields.logger,
+  }
+}
+
+/** Assembles the host passed to `Plugin.setup`. */
 export function buildPluginHost(
-  shared: SharedHostValues,
-  extra: {
+  shared: SharedHostFields,
+  phase: {
     providers: Providers
     systemPromptParts: string[]
-    providerId: string
-    modelId: string
     context: Context
+    modelId: string
   },
 ): PluginHost {
-  return { ...shared, ...extra }
+  return {
+    ...buildBase(shared),
+    providers: phase.providers,
+    systemPromptParts: phase.systemPromptParts,
+    providerId: phase.context.providerId,
+    modelId: phase.modelId,
+    context: phase.context,
+  }
 }
 
-/** Builds the `run` host: shared values plus the built agent and switching. */
+/** Assembles the host passed to `Plugin.run`. */
 export function buildRunHost(
-  shared: SharedHostValues,
-  extra: {
+  shared: SharedHostFields,
+  phase: {
     agent: Agent
-    agentFor: (session: Context) => Agent
     agents: AgentsManager
     context: Context
-    sessionId: string | undefined
-    providerId: string | undefined
-    modelId: string | undefined
+    modelId: string
+    agentFor: (session: Context) => Agent
     switchModel: (session: Context, providerId: string, modelId: string) => Promise<SwitchResult>
   },
 ): RunHost {
-  return { ...shared, ...extra }
+  return {
+    ...buildBase(shared),
+    agent: phase.agent,
+    agentFor: phase.agentFor,
+    agents: phase.agents,
+    context: phase.context,
+    sessionId: phase.context.id,
+    providerId: phase.context.providerId,
+    modelId: phase.modelId,
+    switchModel: phase.switchModel,
+  }
 }
