@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Writable } from 'node:stream'
 
-import { simulateReadableStream } from 'ai'
+import { simulateReadableStream, tool } from 'ai'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 
 import { Agent, type AgentEvent, type AgentOutputEvent } from '../../src/agent/agent.js'
 import { Context } from '../../src/session/context.js'
@@ -162,6 +163,60 @@ describe('Agent', () => {
     // Ephemeral run, no context: messages are discarded.
     expect(result.responseMessages).toHaveLength(0)
     expect(model.doStreamCalls).toHaveLength(2)
+  })
+
+  it('reports a throwing tool as an error result', async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: 'call-1',
+                toolName: 'boom',
+                input: JSON.stringify({ reason: 'test' }),
+              },
+              { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: undefined } },
+            ],
+          }),
+        },
+        {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: 'Recovered.' },
+              { type: 'text-end', id: 'text-1' },
+              { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+            ],
+          }),
+        },
+      ],
+    })
+
+    const agent = new Agent({
+      model,
+      tools: {
+        boom: tool({
+          description: 'Always fails.',
+          inputSchema: z.object({ reason: z.string() }),
+          execute: async (): Promise<string> => {
+            throw new Error('nope')
+          },
+        }),
+      },
+      maxSteps: 4,
+    })
+    const events = await collectEvents(agent, 'try')
+
+    expect(events.find((event) => event.type === 'tool-result')).toMatchObject({
+      toolCallId: 'call-1',
+      toolName: 'boom',
+      isError: true,
+    })
+    expect(textOf(events)).toBe('Recovered.')
   })
 })
 

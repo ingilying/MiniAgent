@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
 
 import { simulateReadableStream } from 'ai'
+import type { ToolSet } from 'ai'
 import { render } from 'ink'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,10 +20,16 @@ import {
   quitCommand,
 } from '../../../../src/commands/commands.js'
 import { Context } from '../../../../src/session/context.js'
+import { createBasicTools } from '../../../../src/plugins/builtin/basic-tools/tools.js'
 import { TuiApp } from '../../../../src/plugins/builtin/tui/app.js'
 import type { RunHost } from '../../../../src/plugins/types.js'
 
 let directory: string
+
+const usage = {
+  inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 5, text: 5, reasoning: undefined },
+}
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), 'miniagent-tui-app-'))
@@ -76,17 +83,25 @@ interface Harness {
 }
 
 async function harness(
-  options: { providerIds?: readonly string[]; declaredModelIds?: readonly string[] } = {},
+  options: {
+    providerIds?: readonly string[]
+    declaredModelIds?: readonly string[]
+    /** Reasoning text the mock model emits before its answer. */
+    reasoning?: string
+    /** Custom model, for tests that need several steps or tool calls. */
+    model?: MockLanguageModelV4
+    /** Tools the test agent may call. */
+    tools?: ToolSet
+  } = {},
 ): Promise<Harness> {
-  const usage = {
-    inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
-    outputTokens: { total: 5, text: 5, reasoning: undefined },
-  }
-  const model = new MockLanguageModelV4({
+  const defaultModel = new MockLanguageModelV4({
     doStream: async () => ({
       stream: simulateReadableStream({
         chunks: [
           { type: 'stream-start', warnings: [] },
+          { type: 'reasoning-start', id: 'reasoning-1' },
+          { type: 'reasoning-delta', id: 'reasoning-1', delta: options.reasoning ?? '' },
+          { type: 'reasoning-end', id: 'reasoning-1' },
           { type: 'text-start', id: 'text-1' },
           { type: 'text-delta', id: 'text-1', delta: 'hi' },
           { type: 'text-end', id: 'text-1' },
@@ -102,7 +117,8 @@ async function harness(
     }),
   })
   const context = new Context([], { contextWindow: 1000 })
-  const agent = new Agent({ model, context })
+  const model = options.model ?? defaultModel
+  const agent = new Agent({ model, context, tools: options.tools, maxSteps: 4 })
   // A switch rebuilds the agent; a fresh instance forces a rerender.
   const switchedAgent = new Agent({ model, context })
   const commands = new CommandRegistry()
@@ -397,6 +413,74 @@ describe('TuiApp', () => {
       expect(frame).toContain('deepseek/deepseek-chat')
       expect(frame).toContain('openai/gpt-6-astra')
       expect(frame).not.toContain('xai/grok-4.7')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('draws reasoning and the answer as separate rows', async () => {
+    const ui = await harness({ reasoning: 'weigh the options' })
+    try {
+      await ui.ready()
+      await ui.write('hi')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle(400)
+      const frame = ui.frames()
+      expect(frame).toContain('✻ Thinking')
+      expect(frame).toContain('weigh the options')
+      expect(frame).toContain('● hi')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('draws a tool call and its result as one row', async () => {
+    const file = join(directory, 'note.txt')
+    const model = new MockLanguageModelV4({
+      doStream: [
+        {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: 'call-1',
+                toolName: 'write',
+                input: JSON.stringify({ path: file, content: 'hello' }),
+              },
+              { type: 'finish', usage, finishReason: { unified: 'tool-calls', raw: undefined } },
+            ],
+          }),
+        },
+        {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: 'text-1' },
+              { type: 'text-delta', id: 'text-1', delta: 'Wrote it.' },
+              { type: 'text-end', id: 'text-1' },
+              { type: 'finish', usage, finishReason: { unified: 'stop', raw: undefined } },
+            ],
+          }),
+        },
+      ],
+    })
+    const ui = await harness({
+      model,
+      tools: { write: createBasicTools(directory).write! },
+    })
+    try {
+      await ui.ready()
+      await ui.write('write a note')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle(500)
+      const frame = ui.frames()
+      // write has its own view: path plus byte count, not raw JSON.
+      expect(frame).toContain('⏺ write(')
+      expect(frame).toContain('⎿ 5 bytes')
+      expect(frame).toContain('● Wrote it.')
     } finally {
       await ui.stop()
     }

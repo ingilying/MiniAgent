@@ -98,6 +98,20 @@ export async function streamRun(env: RunEnv, item: QueueItem, turn: Turn): Promi
           env.emit({ type: 'tool-result', ...outcome }, id)
           break
         }
+        case 'tool-error':
+          // A throwing tool: keep the failure on the result event so a
+          // frontend can render it like any other outcome.
+          env.emit(
+            {
+              type: 'tool-result',
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              output: part.error,
+              isError: true,
+            },
+            id,
+          )
+          break
         case 'finish-step':
           env.emit(
             {

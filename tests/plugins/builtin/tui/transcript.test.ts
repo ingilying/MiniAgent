@@ -7,6 +7,8 @@ import {
   applyUser,
   emptyTranscript,
   initialTranscript,
+  type TranscriptLine,
+  type TranscriptState,
 } from '../../../../src/plugins/builtin/tui/transcript.js'
 
 function ids(): () => string {
@@ -16,6 +18,18 @@ function ids(): () => string {
 
 function event(type: AgentEvent['type'], extra = {}): AgentEvent {
   return { type, ...extra } as AgentEvent
+}
+
+function kinds(state: TranscriptState): Array<TranscriptLine['kind']> {
+  return state.lines.map((line) => line.kind)
+}
+
+/** Text of a row, or the output of a tool row, for readable assertions. */
+function textOf(line: TranscriptLine | undefined): unknown {
+  if (line === undefined) {
+    return undefined
+  }
+  return line.kind === 'tool' ? line.output : 'text' in line ? line.text : undefined
 }
 
 describe('TUI transcript', () => {
@@ -31,30 +45,145 @@ describe('TUI transcript', () => {
     state = applyEvent(state, event('finish', { finishReason: 'stop', usage: undefined }), makeId)
 
     expect(state.liveText).toBe('')
-    expect(state.lines).toEqual([{ id: 'id-1', kind: 'assistant', text: 'Hello world' }])
+    expect(kinds(state)).toEqual(['assistant'])
+    expect(textOf(state.lines[0])).toBe('Hello world')
   })
 
-  it('flushes live text before tool and error rows', () => {
+  it('keeps reasoning live until the answer starts, then flushes it first', () => {
     const makeId = ids()
     let state = emptyTranscript()
-    state = applyEvent(state, event('text-delta', { text: 'Working' }), makeId)
+    state = applyEvent(state, event('reasoning-delta', { text: 'weigh ' }), makeId)
+    state = applyEvent(state, event('reasoning-delta', { text: 'options' }), makeId)
+
+    expect(state.liveReasoning).toBe('weigh options')
+    expect(state.lines).toEqual([])
+
+    state = applyEvent(state, event('text-delta', { text: 'Answer' }), makeId)
+    state = applyEvent(state, event('finish', { finishReason: 'stop', usage: undefined }), makeId)
+
+    expect(kinds(state)).toEqual(['reasoning', 'assistant'])
+    expect(textOf(state.lines[0])).toBe('weigh options')
+    expect(textOf(state.lines[1])).toBe('Answer')
+    expect(state.liveReasoning).toBe('')
+  })
+
+  it('shows a tool call as pending until its result pairs it into one row', () => {
+    const makeId = ids()
+    let state = emptyTranscript()
     state = applyEvent(
       state,
       event('tool-call', { toolCallId: 'c1', toolName: 'read', input: { path: 'a.txt' } }),
       makeId,
     )
+
+    expect(state.liveTools).toEqual([
+      { toolCallId: 'c1', toolName: 'read', input: { path: 'a.txt' } },
+    ])
+    expect(state.lines).toEqual([])
+
     state = applyEvent(
       state,
       event('tool-result', { toolCallId: 'c1', toolName: 'read', output: 'contents' }),
       makeId,
     )
+
+    expect(state.liveTools).toEqual([])
+    expect(kinds(state)).toEqual(['tool'])
+    expect(state.lines[0]).toMatchObject({
+      toolName: 'read',
+      input: { path: 'a.txt' },
+      output: 'contents',
+      isError: false,
+    })
+  })
+
+  it('marks a failed tool call', () => {
+    const makeId = ids()
+    let state = emptyTranscript()
+    state = applyEvent(
+      state,
+      event('tool-call', { toolCallId: 'c1', toolName: 'shell', input: { command: 'false' } }),
+      makeId,
+    )
+    state = applyEvent(
+      state,
+      event('tool-result', {
+        toolCallId: 'c1',
+        toolName: 'shell',
+        output: new Error('exit 1'),
+        isError: true,
+      }),
+      makeId,
+    )
+
+    expect(state.lines[0]).toMatchObject({ kind: 'tool', isError: true })
+  })
+
+  it('keeps a result whose call was never seen', () => {
+    const makeId = ids()
+    const state = applyEvent(
+      emptyTranscript(),
+      event('tool-result', { toolCallId: 'c9', toolName: 'read', output: 'late' }),
+      makeId,
+    )
+
+    expect(kinds(state)).toEqual(['tool'])
+    expect(state.lines[0]).toMatchObject({ input: undefined, output: 'late' })
+  })
+
+  it('flushes live text before a tool row', () => {
+    const makeId = ids()
+    let state = emptyTranscript()
+    state = applyEvent(state, event('text-delta', { text: 'Working' }), makeId)
+    state = applyEvent(
+      state,
+      event('tool-call', { toolCallId: 'c1', toolName: 'read', input: { path: 'a' } }),
+      makeId,
+    )
+    state = applyEvent(
+      state,
+      event('tool-result', { toolCallId: 'c1', toolName: 'read', output: 'ok' }),
+      makeId,
+    )
+
+    expect(kinds(state)).toEqual(['assistant', 'tool'])
+    expect(textOf(state.lines[0])).toBe('Working')
+  })
+
+  it('flushes live phases and drops pending tools on error', () => {
+    const makeId = ids()
+    let state = emptyTranscript()
+    state = applyEvent(state, event('reasoning-delta', { text: 'thinking' }), makeId)
+    state = applyEvent(state, event('text-delta', { text: 'Working' }), makeId)
+    state = applyEvent(
+      state,
+      event('tool-call', { toolCallId: 'c1', toolName: 'read', input: {} }),
+      makeId,
+    )
     state = applyEvent(state, event('error', { error: new Error('boom') }), makeId)
 
+    expect(kinds(state)).toEqual(['reasoning', 'assistant', 'error'])
+    expect(textOf(state.lines[2])).toBe('boom')
     expect(state.liveText).toBe('')
-    expect(state.lines.map((line) => line.kind)).toEqual(['assistant', 'tool', 'tool', 'error'])
-    expect(state.lines[0]?.text).toBe('Working')
-    expect(state.lines[1]?.text).toContain('read')
-    expect(state.lines[3]?.text).toBe('boom')
+    expect(state.liveReasoning).toBe('')
+    expect(state.liveTools).toEqual([])
+  })
+
+  it('never leaves a pending tool call after finish', () => {
+    const makeId = ids()
+    let state = applyEvent(
+      emptyTranscript(),
+      event('tool-call', { toolCallId: 'c1', toolName: 'read', input: {} }),
+      makeId,
+    )
+    state = applyEvent(
+      state,
+      event('finish', { finishReason: 'tool-calls', usage: undefined }),
+      makeId,
+    )
+
+    expect(state.liveTools).toEqual([])
+    expect(state.lines).toEqual([])
   })
 
   it('ignores step boundary events', () => {
@@ -71,34 +200,35 @@ describe('TUI transcript', () => {
     expect(state).toEqual(emptyTranscript())
   })
 
-  it('adds user turns and drops empty live text', () => {
+  it('adds user turns and flushes a running answer above them', () => {
     const makeId = ids()
-    const state = applyUser(emptyTranscript(), makeId(), 'What is 6 * 7?')
+    let state = applyEvent(emptyTranscript(), event('text-delta', { text: 'partial' }), makeId)
+    state = applyUser(state, makeId, 'What is 6 * 7?')
 
     expect(state.liveText).toBe('')
-    expect(state.lines).toEqual([{ id: 'id-1', kind: 'user', text: 'What is 6 * 7?' }])
+    expect(kinds(state)).toEqual(['assistant', 'user'])
+    expect(textOf(state.lines[1])).toBe('What is 6 * 7?')
   })
 
   it('pins the banner rows above later turns', () => {
     const makeId = ids()
     let state = initialTranscript(makeId, 'ART', 'openai/model · /tmp')
 
-    expect(state.lines.map((line) => line.kind)).toEqual(['art', 'welcome'])
-    expect(state.lines[1]?.text).toBe('openai/model · /tmp')
+    expect(kinds(state)).toEqual(['art', 'welcome'])
+    expect(textOf(state.lines[1])).toBe('openai/model · /tmp')
 
-    state = applyUser(state, makeId(), 'hello')
+    state = applyUser(state, makeId, 'hello')
     state = applyEvent(state, event('error', { error: new Error('boom') }), makeId)
 
-    expect(state.lines.map((line) => line.kind)).toEqual(['art', 'welcome', 'user', 'error'])
+    expect(kinds(state)).toEqual(['art', 'welcome', 'user', 'error'])
   })
 
   it('appends command output as system rows', () => {
     const makeId = ids()
-    let state = emptyTranscript()
-    state = applyUser(state, makeId(), '/help')
-    state = applyNotice(state, makeId(), 'Available commands:')
+    let state = applyUser(emptyTranscript(), makeId, '/help')
+    state = applyNotice(state, makeId, 'Available commands:')
 
-    expect(state.lines.map((line) => line.kind)).toEqual(['user', 'system'])
-    expect(state.lines[1]?.text).toBe('Available commands:')
+    expect(kinds(state)).toEqual(['user', 'system'])
+    expect(textOf(state.lines[1])).toBe('Available commands:')
   })
 })

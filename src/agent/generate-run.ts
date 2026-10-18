@@ -64,6 +64,20 @@ export async function generateRun(env: RunEnv, item: QueueItem, turn: Turn): Pro
         id,
       )
     }
+    for (const part of step.content) {
+      if (part.type === 'tool-error') {
+        env.emit(
+          {
+            type: 'tool-result',
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            output: part.error,
+            isError: true,
+          },
+          id,
+        )
+      }
+    }
     if (step.text.length > 0) {
       env.emit({ type: 'text-delta', text: step.text }, id)
     }

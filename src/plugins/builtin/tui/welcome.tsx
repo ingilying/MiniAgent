@@ -1,6 +1,8 @@
 import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
 
+import { theme } from './theme.js'
+
 /** 5x5 block glyphs for the title art. Unknown chars render blank. */
 const GLYPHS: Record<string, readonly string[]> = {
   A: [' ███ ', '█   █', '█████', '█   █', '█   █'],
@@ -30,7 +32,7 @@ export function titleArt(title: string): string[] {
 
 /** Big title art, pinned as the first transcript row. */
 export function WelcomeArt({ text }: { text: string }): ReactElement {
-  return <Text color="#d97757">{text}</Text>
+  return <Text color={theme.accent}>{text}</Text>
 }
 
 /** Welcome box, pinned as the second transcript row. */
@@ -38,7 +40,7 @@ export function WelcomeBox({ subtitle }: { subtitle: string }): ReactElement {
   return (
     <Box
       borderStyle="round"
-      borderColor="#d97757"
+      borderColor={theme.accent}
       paddingX={1}
       flexDirection="column"
       marginTop={1}

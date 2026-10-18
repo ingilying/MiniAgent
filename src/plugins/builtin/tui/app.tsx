@@ -8,7 +8,14 @@ import type { RunHost } from '../../types.js'
 import type { Agent } from '../../../agent/agent.js'
 import { parseCommand, type CommandContext, type ModelSwitch } from '../../../commands/commands.js'
 import { listCachedModels } from '../../../models/catalog.js'
-import { CandidateMenu, InputBox, TranscriptRow } from './components.js'
+import {
+  CandidateMenu,
+  InputBox,
+  LiveAnswer,
+  LiveReasoning,
+  LiveToolCall,
+  TranscriptRow,
+} from './components.js'
 import { contextUsage } from './format.js'
 import { useMenu } from './menu.js'
 import {
@@ -86,17 +93,17 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   )
 
   const submit = (text: string): void => {
-    setTranscript((previous) => applyUser(previous, makeId(), text))
+    setTranscript((previous) => applyUser(previous, makeId, text))
     setPending((count) => count + 1)
     agent.submit(text)
   }
 
   const notice = (text: string): void => {
-    setTranscript((previous) => applyNotice(previous, makeId(), text))
+    setTranscript((previous) => applyNotice(previous, makeId, text))
   }
 
   const runCommand = (text: string): void => {
-    setTranscript((previous) => applyUser(previous, makeId(), text))
+    setTranscript((previous) => applyUser(previous, makeId, text))
     const parsed = parseCommand(text)
     const command = parsed === undefined ? undefined : host.commands.find(parsed.name)
     if (parsed === undefined || command === undefined) {
@@ -164,12 +171,11 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       <Static items={[...transcript.lines]}>
         {(line: TranscriptLine) => <TranscriptRow key={line.id} line={line} />}
       </Static>
-      {transcript.liveText.length > 0 && (
-        <Box>
-          <Text color="green">● </Text>
-          <Text>{transcript.liveText}</Text>
-        </Box>
-      )}
+      {transcript.liveReasoning.length > 0 && <LiveReasoning text={transcript.liveReasoning} />}
+      {transcript.liveText.length > 0 && <LiveAnswer text={transcript.liveText} />}
+      {transcript.liveTools.map((tool) => (
+        <LiveToolCall key={tool.toolCallId} tool={tool} />
+      ))}
       <InputBox input={input} hasTyped={hasTyped} pending={pending} />
       {menu.length > 0 && <CandidateMenu items={menu} selected={selected} />}
       {hidden > 0 && (

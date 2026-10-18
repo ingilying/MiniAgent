@@ -56,6 +56,51 @@ function capped(
   return { stdout: stdout.slice(0, half), stderr: stderr.slice(0, half), truncated: true }
 }
 
+/** Context lines shown on each side of an edit, for a diff view. */
+const CHANGE_CONTEXT = 3
+
+/**
+ * The replaced region of the file, with a few untouched lines around it: the
+ * line number of the first change, the lines that left, the lines that
+ * replaced them, and the context on both sides. Undefined when the text is
+ * not in `content`.
+ */
+function changeAt(
+  content: string,
+  oldString: string,
+  newString: string,
+):
+  | {
+      line: number
+      before: string[]
+      removed: string[]
+      added: string[]
+      after: string[]
+    }
+  | undefined {
+  const at = content.indexOf(oldString)
+  if (at === -1) {
+    return undefined
+  }
+  // Report whole lines: a diff of partial lines would look like the rest of
+  // each line was deleted.
+  const lineStart = content.lastIndexOf('\n', at) + 1
+  const lineBreak = content.indexOf('\n', at + oldString.length)
+  const lineEnd = lineBreak === -1 ? content.length : lineBreak
+  const removed = content.slice(lineStart, lineEnd).split('\n')
+  const replaced = `${content.slice(lineStart, at)}${newString}${content.slice(at + oldString.length, lineEnd)}`
+
+  const beforeText = lineStart === 0 ? '' : content.slice(0, lineStart - 1)
+  const afterText = lineBreak === -1 ? '' : content.slice(lineBreak + 1)
+  return {
+    line: content.slice(0, lineStart).split('\n').length,
+    before: beforeText.length === 0 ? [] : beforeText.split('\n').slice(-CHANGE_CONTEXT),
+    removed,
+    added: replaced.split('\n'),
+    after: afterText.length === 0 ? [] : afterText.split('\n').slice(0, CHANGE_CONTEXT),
+  }
+}
+
 /**
  * Builds the basic file and shell tools bound to a project directory.
  *
@@ -159,7 +204,12 @@ export function createBasicTools(cwd: string): ToolSet {
           ? content.split(oldString).join(newString)
           : content.replace(oldString, newString)
       await writeFile(resolved, updated, 'utf8')
-      return { path: resolved, replacements: replaceAll === true ? occurrences : 1 }
+      return {
+        path: resolved,
+        replacements: replaceAll === true ? occurrences : 1,
+        // The first hunk, so a frontend can draw the change with context.
+        change: changeAt(content, oldString, newString),
+      }
     },
   })
 

@@ -80,7 +80,17 @@ describe('edit', () => {
       toolExecutionOptions,
     )
 
-    expect(output).toEqual({ path, replacements: 1 })
+    expect(output).toMatchObject({
+      path,
+      replacements: 1,
+      change: {
+        line: 1,
+        before: [],
+        removed: ['hello world'],
+        added: ['hello there'],
+        after: [],
+      },
+    })
     await expect(tools.read!.execute!({ path }, toolExecutionOptions)).resolves.toMatchObject({
       content: 'hello there',
     })
@@ -113,7 +123,7 @@ describe('edit', () => {
       toolExecutionOptions,
     )
 
-    expect(output).toEqual({ path, replacements: 3 })
+    expect(output).toMatchObject({ path, replacements: 3 })
   })
 })
 
@@ -135,7 +145,7 @@ describe('basic tools resolve against the injected cwd', () => {
       toolExecutionOptions,
     )
 
-    expect(edited).toEqual({ path: join(directory, 'note.txt'), replacements: 1 })
+    expect(edited).toMatchObject({ path: join(directory, 'note.txt'), replacements: 1 })
     await expect(
       tools.read!.execute!({ path: 'note.txt' }, toolExecutionOptions),
     ).resolves.toMatchObject({ content: 'hello there' })

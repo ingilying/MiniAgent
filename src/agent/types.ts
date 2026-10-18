@@ -102,6 +102,8 @@ export type AgentEvent =
       readonly toolCallId: string
       readonly toolName: string
       readonly output: unknown
+      /** Set when the tool threw: `output` is then the error. */
+      readonly isError?: boolean
     }
   | {
       readonly type: 'step-finish'

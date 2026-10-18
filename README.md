@@ -514,6 +514,8 @@ Where to add things:
 │   │           ├── index.ts
 │   │           ├── app.tsx
 │   │           ├── components.tsx
+│   │           ├── markdown.tsx   # Markdown subset for model answers
+│   │           ├── tool-views.tsx  # per-tool renderers + generic fallback
 │   │           ├── transcript.ts
 │   │           ├── menu.ts
 │   │           ├── format.ts
