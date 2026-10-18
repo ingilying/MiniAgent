@@ -173,10 +173,7 @@ describe('built-in commands', () => {
     const { context, switchModel } = ctx()
     await modelCommand.run(['meta-llama/llama-4-scout-17b-16e-instruct'], context)
 
-    expect(switchModel).toHaveBeenCalledWith(
-      'openai',
-      'meta-llama/llama-4-scout-17b-16e-instruct',
-    )
+    expect(switchModel).toHaveBeenCalledWith('openai', 'meta-llama/llama-4-scout-17b-16e-instruct')
   })
 
   it('model treats the prefix as a provider only when it is loaded', async () => {
@@ -198,10 +195,7 @@ describe('built-in commands', () => {
     await modelCommand.run(['openai/ghost'], context)
 
     expect(switchModel).toHaveBeenCalledWith('openai', 'ghost')
-    expect(notice).toHaveBeenNthCalledWith(
-      1,
-      'Unknown model "openai/ghost". Trying it anyway.',
-    )
+    expect(notice).toHaveBeenNthCalledWith(1, 'Unknown model "openai/ghost". Trying it anyway.')
     expect(notice).toHaveBeenNthCalledWith(2, 'Switched to openai/other. Context window unknown.')
   })
 
@@ -230,10 +224,11 @@ describe('built-in commands', () => {
   })
 
   it('model warns when the catalog has no context window', async () => {
-    const { context, notice } = ctx(
-      { providerId: 'openai', modelId: 'gpt-6-astra' },
-      async () => ({ providerId: 'openai', modelId: 'other', contextWindow: undefined }),
-    )
+    const { context, notice } = ctx({ providerId: 'openai', modelId: 'gpt-6-astra' }, async () => ({
+      providerId: 'openai',
+      modelId: 'other',
+      contextWindow: undefined,
+    }))
     await modelCommand.run(['other'], context)
 
     expect(notice).toHaveBeenCalledWith('Switched to openai/other. Context window unknown.')
@@ -271,12 +266,7 @@ describe('built-in commands', () => {
     modelsCommand.run([], context)
 
     const [text] = notice.mock.calls[0] as [string]
-    expect(text.split('\n')).toEqual([
-      'Models (3):',
-      '  openai/b',
-      '  openai/z',
-      '  deepseek/a',
-    ])
+    expect(text.split('\n')).toEqual(['Models (3):', '  openai/b', '  openai/z', '  deepseek/a'])
   })
 
   it('models says so when the cache is empty', () => {

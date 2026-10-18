@@ -18,7 +18,7 @@
     "test": "pnpm build-info && vitest run",
     "test:watch": "pnpm build-info && vitest",
     "typecheck": "pnpm build-info && tsc --noEmit",
-    "check": "pnpm typecheck && pnpm lint && pnpm test"
+    "check": "pnpm format:check && pnpm typecheck && pnpm lint && pnpm test"
   },
   "engines": {
     "node": ">=20"

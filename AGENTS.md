@@ -9,6 +9,9 @@ Rules for agents that work on this project.
 2. **Read the official docs first.** If you are not sure how an SDK works, search
    the web for the vendor's own docs and read them. Do not guess an API.
 3. **Keep it simple.** Small classes that do one job. No big frameworks.
+4. **Format before every commit.** Run `pnpm format` immediately before
+   committing, even when `pnpm check` is green. CI runs `pnpm format:check`,
+   so unformatted code fails the build after it is already pushed.
 
 ## Tech
 
@@ -20,4 +23,5 @@ Rules for agents that work on this project.
 
 ## Before you say you are done
 
-Run `pnpm check` (types, lint, tests). Do not leave it red. Do not commit.
+Run `pnpm check` (format, types, lint, tests). Do not leave it red. Do not
+commit without permission, and run `pnpm format` right before you do.

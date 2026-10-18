@@ -7,7 +7,13 @@ import type { Logger } from 'pino'
 import type { Agent } from '../agent/agent.js'
 import { AgentsManager } from '../agent/manager.js'
 import { VERSION } from '../build-info.js'
-import { CommandRegistry, helpCommand, modelCommand, modelsCommand, quitCommand } from '../commands/commands.js'
+import {
+  CommandRegistry,
+  helpCommand,
+  modelCommand,
+  modelsCommand,
+  quitCommand,
+} from '../commands/commands.js'
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, SYSTEM_PROMPT } from '../defaults.js'
 import { defaultLogger, renameFinishedLog } from '../logging/logger.js'
 import { loadProviders } from '../models/providers.js'
