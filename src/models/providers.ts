@@ -14,6 +14,16 @@ export interface ProviderOptions {
   readonly baseURL?: string
 }
 
+/** What a caller knows about a provider beyond the models.dev catalog. */
+export interface ProviderExtras {
+  /**
+   * Model ids this provider serves. The catalog only lists the providers it
+   * ships entries for, so a custom provider declares its models here to
+   * reach model completion and `/models`.
+   */
+  readonly models?: readonly string[]
+}
+
 /**
  * The app's view of the AI SDK provider registry: the store of loaded
  * providers. `providers` and `registerProvider` are untyped but public at
@@ -40,6 +50,9 @@ export class Providers {
   /** The provider id and its create function for every loaded provider. */
   private readonly creators = new Map<string, (options: ProviderOptions) => Provider>()
 
+  /** The model ids each provider declared through `add`. */
+  private readonly declared = new Map<string, readonly string[]>()
+
   constructor() {
     this.registry = makeRegistry()
     this.add('openai', ({ apiKey, baseURL }) => createOpenAI({ apiKey, baseURL }))
@@ -48,9 +61,16 @@ export class Providers {
   }
 
   /** Adds one provider under the given id: its create function and a first provider at default settings. Wins over a provider already loaded under the id. */
-  add(id: string, create: (options: ProviderOptions) => Provider): void {
+  add(
+    id: string,
+    create: (options: ProviderOptions) => Provider,
+    extras: ProviderExtras = {},
+  ): void {
     validateId(id)
     this.creators.set(id, create)
+    if (extras.models !== undefined) {
+      this.declared.set(id, [...extras.models])
+    }
     this.insert(id, create({}))
   }
 
@@ -78,6 +98,21 @@ export class Providers {
             }),
       )
     }
+  }
+
+  /** Ids of the loaded providers, sorted. The set a model may be switched to. */
+  ids(): string[] {
+    return Object.keys(this.registry.providers).sort()
+  }
+
+  /**
+   * Provider-qualified model ids the callers declared through `add`, sorted.
+   * They supplement the catalog, which cannot list a custom provider.
+   */
+  declaredModels(): string[] {
+    return [...this.declared]
+      .flatMap(([id, models]) => models.map((model) => `${id}/${model}`))
+      .sort()
   }
 
   /** Builds the model for one provider id and model id. Throws `NoSuchProviderError` for a provider id that is not loaded. */

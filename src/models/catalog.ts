@@ -81,13 +81,24 @@ const cacheEntrySchema = z.object({
 
 let memoryCache: CacheEntry | undefined
 
+export interface ListCachedModelsOptions {
+  /**
+   * Keep only ids whose provider is in this set. Pass the loaded provider
+   * ids so a frontend never offers a model the app cannot switch to.
+   */
+  providers?: readonly string[]
+}
+
 /**
  * Lists every `provider/id` in the on-disk catalog cache, without touching
  * the network. Used for model-name completion: breadth matters more than
  * freshness, so a stale cache still counts. Missing or unreadable files
  * yield an empty list, never an error.
  */
-export async function listCachedModels(cacheFile: string): Promise<string[]> {
+export async function listCachedModels(
+  cacheFile: string,
+  options: ListCachedModelsOptions = {},
+): Promise<string[]> {
   let parsed: unknown
   try {
     parsed = JSON.parse(await readFile(cacheFile, 'utf8'))
@@ -99,8 +110,12 @@ export async function listCachedModels(cacheFile: string): Promise<string[]> {
     return []
   }
   const catalog = toCatalog(result.data.catalog)
+  const allowed = options.providers === undefined ? undefined : new Set(options.providers)
   const ids: string[] = []
   for (const [providerId, provider] of Object.entries(catalog)) {
+    if (allowed !== undefined && !allowed.has(providerId)) {
+      continue
+    }
     for (const modelId of Object.keys(provider.models ?? {})) {
       ids.push(`${providerId}/${modelId}`)
     }

@@ -118,7 +118,9 @@ the DeepSeek plugin ([src/plugins/builtin/deepseek.ts](src/plugins/builtin/deeps
 `providers.loadConfig(settings)`, initialising the provider under the same id
 with its settings. Any other id becomes an OpenAI-compatible provider built
 from its settings. Adding another built-in is one create function in the
-constructor.
+constructor. `providers.add(id, create, { models })` also records model ids,
+so a custom provider the models.dev catalog does not list still offers its
+models in `/model` completion and in `/models`.
 
 It prints the context-window diagnostics as it resolves them (tagged with
 `module: 'app'` in the log line), and
@@ -476,7 +478,7 @@ Where to add things:
 │   │   ├── catalog.ts       # model limits from the models.dev catalog
 │   │   └── context-window.ts# context-window resolution for a Context
 │   ├── commands/          # core slash commands
-│   │   └── commands.ts    # registry + parse + quit/help/model
+│   │   └── commands.ts    # registry + parse + quit/help/model/models
 │   ├── logging/
 │   │   └── logger.ts      # pino setup: destinations, levels, module children
 │   ├── app/               # bootstrap + composition

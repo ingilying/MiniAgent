@@ -13,6 +13,10 @@ export interface CommandContext {
   readonly commands: readonly CommandInfo[]
   /** Session the command acts on. */
   readonly current: SessionIdentity
+  /** Ids of the loaded providers, sorted. A provider outside this set is unknown. */
+  readonly providers: readonly string[]
+  /** Provider-qualified model ids the cached catalog lists for the loaded providers. */
+  readonly knownModels: readonly string[]
   /** Leaves the frontend. Wired by the caller (Ink `exit()`, ...). */
   quit(): void
   /** Shows one output row in the frontend. */
@@ -134,6 +138,9 @@ export const helpCommand: Command = {
   },
 }
 
+/** Caps one `/models` listing; a filter narrows it. */
+const MAX_LISTED_MODELS = 40
+
 /** Shows or switches the session model. */
 export const modelCommand: Command = {
   name: 'model',
@@ -148,18 +155,88 @@ export const modelCommand: Command = {
       ctx.notice('Usage: /model [provider/]model')
       return
     }
-    const slash = raw.indexOf('/')
-    const provider = slash === -1 ? ctx.current.providerId : raw.slice(0, slash)
-    const model = slash === -1 ? raw : raw.slice(slash + 1)
-    if (provider.length === 0 || model.length === 0) {
+    const target = parseModelTarget(raw, ctx.current.providerId, ctx.providers)
+    if (target === undefined) {
       ctx.notice('Usage: /model [provider/]model')
       return
     }
-    const switched = await ctx.switchModel(provider, model)
+    const id = `${target.providerId}/${target.modelId}`
+    if (ctx.knownModels.length > 0 && !ctx.knownModels.includes(id)) {
+      // The catalog is a cached snapshot, so a model it does not list may
+      // still work. Warn about the likely typo, then let the provider decide.
+      const hint =
+        target.unknownPrefix === undefined
+          ? ''
+          : ` Provider "${target.unknownPrefix}" is not loaded.`
+      ctx.notice(`Unknown model "${id}". Trying it anyway.${hint}`)
+    }
+    const switched = await ctx.switchModel(target.providerId, target.modelId)
     const window =
       switched.contextWindow === undefined
-        ? ''
+        ? ' Context window unknown.'
         : ` (${switched.contextWindow.toLocaleString('en-US')} token window)`
     ctx.notice(`Switched to ${switched.providerId}/${switched.modelId}.${window}`)
   },
+}
+
+/** Lists the models the cached catalog holds for the loaded providers. */
+export const modelsCommand: Command = {
+  name: 'models',
+  description: 'List models of the loaded providers. Usage: /models [filter]',
+  run(args, ctx): void {
+    if (ctx.knownModels.length === 0) {
+      ctx.notice('No cached models. Send a prompt first so the catalog is fetched.')
+      return
+    }
+    const filter = args.join(' ').trim().toLowerCase()
+    const matched =
+      filter.length === 0
+        ? ctx.knownModels
+        : ctx.knownModels.filter((id) => id.toLowerCase().includes(filter))
+    if (matched.length === 0) {
+      ctx.notice(`No models match "${filter}".`)
+      return
+    }
+    const ordered = [...matched].sort((a, b) => compareModelIds(a, b, ctx.current.providerId))
+    const shown = ordered.slice(0, MAX_LISTED_MODELS)
+    const lines = shown.map((id) => `  ${id}`)
+    if (ordered.length > shown.length) {
+      lines.push(`  … ${ordered.length - shown.length} more. Narrow with /models <filter>.`)
+    }
+    ctx.notice([`Models (${ordered.length}):`, ...lines].join('\n'))
+  },
+}
+
+/** Current provider first, then alphabetical: the order the model menu uses. */
+function compareModelIds(a: string, b: string, currentProvider: string): number {
+  const aOurs = a.startsWith(`${currentProvider}/`) ? 0 : 1
+  const bOurs = b.startsWith(`${currentProvider}/`) ? 0 : 1
+  return aOurs - bOurs || a.localeCompare(b)
+}
+
+/**
+ * Resolves the `/model` argument to a provider and model. A `provider/model`
+ * prefix counts as a provider only when it is one of the loaded provider ids,
+ * so a bare model id that contains a slash (e.g. `meta-llama/llama-4-...`)
+ * stays on the current provider. `unknownPrefix` holds such a prefix, so the
+ * caller can hint at a mistyped provider name. Returns `undefined` for an
+ * empty provider or model part, which the caller reports as a usage error.
+ */
+function parseModelTarget(
+  raw: string,
+  currentProvider: string,
+  loadedProviders: readonly string[],
+): { providerId: string; modelId: string; unknownPrefix?: string } | undefined {
+  const slash = raw.indexOf('/')
+  if (slash === -1) {
+    return { providerId: currentProvider, modelId: raw }
+  }
+  const prefix = raw.slice(0, slash)
+  const rest = raw.slice(slash + 1)
+  if (prefix.length === 0 || rest.length === 0) {
+    return undefined
+  }
+  return loadedProviders.includes(prefix)
+    ? { providerId: prefix, modelId: rest }
+    : { providerId: currentProvider, modelId: raw, unknownPrefix: prefix }
 }

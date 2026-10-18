@@ -4,6 +4,7 @@ import {
   CommandRegistry,
   helpCommand,
   modelCommand,
+  modelsCommand,
   parseCommand,
   quitCommand,
   type Command,
@@ -18,6 +19,7 @@ function ctx(
     modelId: 'other',
     contextWindow: undefined,
   }),
+  extra: { providers?: readonly string[]; knownModels?: readonly string[] } = {},
 ): {
   context: CommandContext
   quit: Mock
@@ -28,7 +30,15 @@ function ctx(
   const notice = vi.fn()
   const switcher = vi.fn(switchModel)
   return {
-    context: { commands: [], current, quit, notice, switchModel: switcher },
+    context: {
+      commands: [],
+      current,
+      providers: extra.providers ?? ['openai', 'deepseek'],
+      knownModels: extra.knownModels ?? [],
+      quit,
+      notice,
+      switchModel: switcher,
+    },
     quit,
     notice,
     switchModel: switcher,
@@ -157,5 +167,124 @@ describe('built-in commands', () => {
     expect(switchModel).not.toHaveBeenCalled()
     expect(notice).toHaveBeenNthCalledWith(1, 'Usage: /model [provider/]model')
     expect(notice).toHaveBeenNthCalledWith(2, 'Usage: /model [provider/]model')
+  })
+
+  it('model keeps the current provider for a model id that contains a slash', async () => {
+    const { context, switchModel } = ctx()
+    await modelCommand.run(['meta-llama/llama-4-scout-17b-16e-instruct'], context)
+
+    expect(switchModel).toHaveBeenCalledWith(
+      'openai',
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+    )
+  })
+
+  it('model treats the prefix as a provider only when it is loaded', async () => {
+    const { context, switchModel } = ctx(
+      { providerId: 'openai', modelId: 'gpt-6-astra' },
+      async () => ({ providerId: 'deepseek', modelId: 'x/y', contextWindow: 1000 }),
+    )
+    await modelCommand.run(['deepseek/x/y'], context)
+
+    expect(switchModel).toHaveBeenCalledWith('deepseek', 'x/y')
+  })
+
+  it('model warns about an unknown model but still tries it', async () => {
+    const { context, notice, switchModel } = ctx(
+      { providerId: 'openai', modelId: 'gpt-6-astra' },
+      undefined,
+      { knownModels: ['openai/gpt-6-astra', 'openai/gpt-5'] },
+    )
+    await modelCommand.run(['openai/ghost'], context)
+
+    expect(switchModel).toHaveBeenCalledWith('openai', 'ghost')
+    expect(notice).toHaveBeenNthCalledWith(
+      1,
+      'Unknown model "openai/ghost". Trying it anyway.',
+    )
+    expect(notice).toHaveBeenNthCalledWith(2, 'Switched to openai/other. Context window unknown.')
+  })
+
+  it('model hints when the slash prefix is not a loaded provider', async () => {
+    const { context, notice, switchModel } = ctx(
+      { providerId: 'openai', modelId: 'gpt-6-astra' },
+      undefined,
+      { knownModels: ['openai/gpt-6-astra'] },
+    )
+    await modelCommand.run(['xai/grok-4'], context)
+
+    expect(switchModel).toHaveBeenCalledWith('openai', 'xai/grok-4')
+    expect(notice).toHaveBeenNthCalledWith(
+      1,
+      'Unknown model "openai/xai/grok-4". Trying it anyway. Provider "xai" is not loaded.',
+    )
+  })
+
+  it('model stays quiet about an unknown prefix without a cached catalog', async () => {
+    const { context, notice, switchModel } = ctx()
+    await modelCommand.run(['xai/grok-4'], context)
+
+    expect(switchModel).toHaveBeenCalledWith('openai', 'xai/grok-4')
+    expect(notice).toHaveBeenCalledTimes(1)
+    expect(notice).toHaveBeenCalledWith('Switched to openai/other. Context window unknown.')
+  })
+
+  it('model warns when the catalog has no context window', async () => {
+    const { context, notice } = ctx(
+      { providerId: 'openai', modelId: 'gpt-6-astra' },
+      async () => ({ providerId: 'openai', modelId: 'other', contextWindow: undefined }),
+    )
+    await modelCommand.run(['other'], context)
+
+    expect(notice).toHaveBeenCalledWith('Switched to openai/other. Context window unknown.')
+  })
+
+  it('models lists the cached models of the loaded providers', () => {
+    const { context, notice } = ctx(undefined, undefined, {
+      knownModels: ['deepseek/deepseek-v4-flash', 'openai/gpt-6-astra'],
+    })
+    modelsCommand.run([], context)
+
+    const [text] = notice.mock.calls[0] as [string]
+    expect(text).toContain('Models (2):')
+    expect(text).toContain('deepseek/deepseek-v4-flash')
+    expect(text).toContain('openai/gpt-6-astra')
+  })
+
+  it('models filters by a substring and reports no match', () => {
+    const { context, notice } = ctx(undefined, undefined, {
+      knownModels: ['deepseek/deepseek-v4-flash', 'openai/gpt-6-astra'],
+    })
+    modelsCommand.run(['deepseek'], context)
+    modelsCommand.run(['zzz'], context)
+
+    const [first] = notice.mock.calls[0] as [string]
+    expect(first).toContain('Models (1):')
+    expect(first).toContain('deepseek/deepseek-v4-flash')
+    expect(notice).toHaveBeenNthCalledWith(2, 'No models match "zzz".')
+  })
+
+  it('models lists the current provider first', () => {
+    const { context, notice } = ctx(undefined, undefined, {
+      knownModels: ['deepseek/a', 'openai/z', 'openai/b'],
+    })
+    modelsCommand.run([], context)
+
+    const [text] = notice.mock.calls[0] as [string]
+    expect(text.split('\n')).toEqual([
+      'Models (3):',
+      '  openai/b',
+      '  openai/z',
+      '  deepseek/a',
+    ])
+  })
+
+  it('models says so when the cache is empty', () => {
+    const { context, notice } = ctx()
+    modelsCommand.run([], context)
+
+    expect(notice).toHaveBeenCalledWith(
+      'No cached models. Send a prompt first so the catalog is fetched.',
+    )
   })
 })

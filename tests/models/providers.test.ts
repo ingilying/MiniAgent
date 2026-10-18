@@ -22,6 +22,29 @@ describe('provider registry', () => {
     expect(Object.keys(loadProviders().registry.providers)).toEqual(BUILT_IN_IDS)
   })
 
+  it('lists the loaded provider ids, sorted', () => {
+    const providers = loadProviders()
+    providers.add('deepseek', deepseekProvider)
+    providers.loadConfig({ ollama: { baseURL: 'http://localhost:11434/v1' } })
+
+    expect(providers.ids()).toEqual(['anthropic', 'deepseek', 'google', 'ollama', 'openai'])
+  })
+
+  it('keeps the model ids a provider declares', () => {
+    const providers = loadProviders()
+    providers.add('gateway', stubProvider, { models: ['small', 'big'] })
+
+    expect(providers.declaredModels()).toEqual(['gateway/big', 'gateway/small'])
+    expect(providers.ids()).toContain('gateway')
+  })
+
+  it('declares no models by default', () => {
+    const providers = loadProviders()
+    providers.add('gateway', stubProvider)
+
+    expect(providers.declaredModels()).toEqual([])
+  })
+
   it('adds configured endpoints from the config', () => {
     const providers = loadProviders()
 

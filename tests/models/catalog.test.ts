@@ -195,6 +195,21 @@ describe('listCachedModels', () => {
     ])
   })
 
+  it('keeps only the providers it is told about', async () => {
+    const cacheFile = join(directory, 'filtered.json')
+    await writeFile(
+      cacheFile,
+      JSON.stringify({ url: 'https://example.test/twelve', at: Date.now(), catalog }),
+      'utf8',
+    )
+
+    expect(await listCachedModels(cacheFile, { providers: ['openai'] })).toEqual([
+      'openai/gpt-6-astra',
+      'openai/text-embedding-3-small',
+    ])
+    expect(await listCachedModels(cacheFile, { providers: [] })).toEqual([])
+  })
+
   it('returns an empty list for a missing or broken cache', async () => {
     expect(await listCachedModels(join(directory, 'missing.json'))).toEqual([])
 

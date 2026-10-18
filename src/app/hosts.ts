@@ -75,6 +75,8 @@ export function buildRunHost(
     agents: AgentsManager
     context: Context
     modelId: string
+    providerIds: readonly string[]
+    declaredModelIds: readonly string[]
     agentFor: (session: Context) => Agent
     switchModel: (session: Context, providerId: string, modelId: string) => Promise<SwitchResult>
   },
@@ -87,6 +89,8 @@ export function buildRunHost(
     context: phase.context,
     sessionId: phase.context.id,
     providerId: phase.context.providerId,
+    providerIds: phase.providerIds,
+    declaredModelIds: phase.declaredModelIds,
     modelId: phase.modelId,
     switchModel: phase.switchModel,
   }

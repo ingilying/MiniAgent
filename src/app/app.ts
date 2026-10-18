@@ -7,7 +7,7 @@ import type { Logger } from 'pino'
 import type { Agent } from '../agent/agent.js'
 import { AgentsManager } from '../agent/manager.js'
 import { VERSION } from '../build-info.js'
-import { CommandRegistry, helpCommand, modelCommand, quitCommand } from '../commands/commands.js'
+import { CommandRegistry, helpCommand, modelCommand, modelsCommand, quitCommand } from '../commands/commands.js'
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, SYSTEM_PROMPT } from '../defaults.js'
 import { defaultLogger, renameFinishedLog } from '../logging/logger.js'
 import { loadProviders } from '../models/providers.js'
@@ -116,7 +116,7 @@ export class App {
       dataDirectory: this.dataDirectory,
       logger: this.moduleLogger('plugin-manager'),
     })
-    this.commands.registerAll([quitCommand, helpCommand, modelCommand])
+    this.commands.registerAll([quitCommand, helpCommand, modelCommand, modelsCommand])
   }
 
   /** Loaded plugins in load order, built-ins first. */
@@ -236,7 +236,7 @@ export class App {
     this.agent = this.options.agent ?? this.agentFor(context)
     agents.set(context, this.agent)
 
-    await this.runPlugins(config, shared, agents, context, this.agent)
+    await this.runPlugins(config, shared, agents, context, this.agent, providers)
   }
 
   /**
@@ -284,12 +284,15 @@ export class App {
     agents: AgentsManager,
     context: Context,
     agent: Agent,
+    providers: Providers,
   ): Promise<void> {
     const host = buildRunHost(shared, {
       agent,
       agents,
       context,
       modelId: modelOf(context, this.defaultModel),
+      providerIds: providers.ids(),
+      declaredModelIds: providers.declaredModels(),
       agentFor: (session) => this.agentFor(session),
       switchModel: (session, providerId, modelId) =>
         this.switchModelFor(session, providerId, modelId),

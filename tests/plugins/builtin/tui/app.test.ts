@@ -15,6 +15,7 @@ import {
   CommandRegistry,
   helpCommand,
   modelCommand,
+  modelsCommand,
   quitCommand,
 } from '../../../../src/commands/commands.js'
 import { Context } from '../../../../src/session/context.js'
@@ -74,7 +75,9 @@ interface Harness {
   stop: () => Promise<void>
 }
 
-async function harness(): Promise<Harness> {
+async function harness(
+  options: { providerIds?: readonly string[]; declaredModelIds?: readonly string[] } = {},
+): Promise<Harness> {
   const usage = {
     inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 5, text: 5, reasoning: undefined },
@@ -106,6 +109,7 @@ async function harness(): Promise<Harness> {
   commands.register(quitCommand)
   commands.register(helpCommand)
   commands.register(modelCommand)
+  commands.register(modelsCommand)
   const host = {
     agent,
     agentFor: (): Agent => agent,
@@ -113,6 +117,8 @@ async function harness(): Promise<Harness> {
     context,
     sessionId: 'session-1',
     providerId: 'openai',
+    providerIds: options.providerIds ?? ['deepseek', 'openai'],
+    declaredModelIds: options.declaredModelIds ?? [],
     modelId: 'gpt-6-astra',
     switchModel: vi.fn(async (session: Context, providerId: string, modelId: string) => {
       // Mirrors App.switchModelFor: mutate the session in place.
@@ -255,6 +261,9 @@ describe('TuiApp', () => {
       expect(lastHighlight(ui.frames())).toBe('❯ /model')
       await ui.writeRaw('\x1b[B')
       await ui.settle()
+      expect(lastHighlight(ui.frames())).toBe('❯ /models')
+      await ui.writeRaw('\x1b[B')
+      await ui.settle()
       expect(lastHighlight(ui.frames())).toBe('❯ /quit')
       await ui.writeRaw('\x1b[B')
       await ui.settle()
@@ -310,6 +319,84 @@ describe('TuiApp', () => {
       expect(ui.frames()).toContain('Switched to openai/gpt-5.')
       // Usage line and model name read the live context, not boot snapshots.
       expect(ui.frames()).toContain('0/2k (0%)')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('offers only loaded providers in the model menu', async () => {
+    await writeFile(
+      join(directory, 'models.json'),
+      JSON.stringify({
+        url: 'https://models.dev/api.json',
+        at: Date.now(),
+        catalog: {
+          openai: { models: { 'gpt-6-astra': { limit: {} } } },
+          deepseek: { models: { 'deepseek-chat': { limit: {} } } },
+          xai: { models: { 'grok-4.7': { limit: {} } } },
+        },
+      }),
+      'utf8',
+    )
+    const ui = await harness()
+    try {
+      await ui.ready()
+      await ui.write('/model ')
+      await ui.settle()
+      const frame = ui.frames()
+      expect(frame).toContain('openai/gpt-6-astra')
+      expect(frame).toContain('deepseek/deepseek-chat')
+      expect(frame).not.toContain('xai/grok-4.7')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('offers declared models the catalog cannot list', async () => {
+    const ui = await harness({
+      providerIds: ['gateway', 'openai'],
+      declaredModelIds: ['gateway/big', 'gateway/small'],
+    })
+    try {
+      await ui.ready()
+      await ui.write('/model ')
+      await ui.settle()
+      const frame = ui.frames()
+      expect(frame).toContain('gateway/big')
+      expect(frame).toContain('gateway/small')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('lists the models of the loaded providers with /models', async () => {
+    await writeFile(
+      join(directory, 'models.json'),
+      JSON.stringify({
+        url: 'https://models.dev/api.json',
+        at: Date.now(),
+        catalog: {
+          openai: { models: { 'gpt-6-astra': { limit: {} } } },
+          deepseek: { models: { 'deepseek-chat': { limit: {} } } },
+          xai: { models: { 'grok-4.7': { limit: {} } } },
+        },
+      }),
+      'utf8',
+    )
+    const ui = await harness()
+    try {
+      await ui.ready()
+      await ui.write('/models')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle()
+      const frame = ui.frames()
+      expect(frame).toContain('Models (2):')
+      expect(frame).toContain('deepseek/deepseek-chat')
+      expect(frame).toContain('openai/gpt-6-astra')
+      expect(frame).not.toContain('xai/grok-4.7')
     } finally {
       await ui.stop()
     }

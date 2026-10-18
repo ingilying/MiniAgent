@@ -42,22 +42,32 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   const [hasTyped, setHasTyped] = useState(false)
   const [pending, setPending] = useState(0)
   const [agent, setAgent] = useState(host.agent)
-  const [modelIds, setModelIds] = useState<string[]>([])
+  const [modelIds, setModelIds] = useState<string[]>(() => [...host.declaredModelIds])
 
-  /** Cached catalog ids for model completion; file cache only, no network. */
+  // Effect dependencies compare arrays by identity, so these keys carry the
+  // content: a frontend that rebuilds the host per render must not refetch.
+  const providerKey = host.providerIds.join(',')
+  const declaredKey = host.declaredModelIds.join(',')
+
+  /**
+   * Cached catalog ids for model completion; file cache only, no network.
+   * The providers' own declarations survive a missing or stale cache.
+   */
   useEffect(() => {
     let live = true
-    void listCachedModels(join(host.dataDirectory, 'models.json')).then((ids) => {
+    void listCachedModels(join(host.dataDirectory, 'models.json'), {
+      providers: host.providerIds,
+    }).then((ids) => {
       if (live) {
-        setModelIds(ids)
+        setModelIds(mergeModelIds(host.declaredModelIds, ids))
       }
     })
     return () => {
       live = false
     }
-  }, [host.dataDirectory])
+  }, [host.dataDirectory, providerKey, declaredKey])
 
-  const { menu, selected, selectedItem, setSelected } = useMenu(
+  const { menu, hidden, selected, selectedItem, setSelected } = useMenu(
     input,
     host.commands.list(),
     modelIds,
@@ -93,7 +103,7 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       notice(`Unknown command "${text}". /help lists commands.`)
       return
     }
-    const ctx = buildCommandContext(host, agent, setAgent, notice, exit)
+    const ctx = buildCommandContext(host, modelIds, agent, setAgent, notice, exit)
     void Promise.resolve(command.run(parsed.args, ctx)).catch((error: unknown) =>
       notice(error instanceof Error ? error.message : String(error)),
     )
@@ -162,6 +172,11 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       )}
       <InputBox input={input} hasTyped={hasTyped} pending={pending} />
       {menu.length > 0 && <CandidateMenu items={menu} selected={selected} />}
+      {hidden > 0 && (
+        <Box paddingX={1}>
+          <Text dimColor>{`  … ${hidden} more. Keep typing to narrow.`}</Text>
+        </Box>
+      )}
       <Box paddingX={1} justifyContent="space-between">
         <Text dimColor>
           {contextUsage(host.context)}
@@ -173,9 +188,15 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   )
 }
 
+/** Catalog ids plus the providers' own declarations, deduplicated and sorted. */
+function mergeModelIds(declared: readonly string[], cached: readonly string[]): string[] {
+  return [...new Set([...declared, ...cached])].sort()
+}
+
 /** Wires a slash command to this TUI: quit exits, notice prints, model switches agents. */
 function buildCommandContext(
   host: RunHost,
+  knownModels: readonly string[],
   agent: Agent,
   setAgent: (agent: Agent) => void,
   notice: (text: string) => void,
@@ -184,6 +205,8 @@ function buildCommandContext(
   return {
     commands: host.commands.list(),
     current: { providerId: host.context.providerId, modelId: host.context.modelId },
+    providers: host.providerIds,
+    knownModels,
     quit,
     notice,
     switchModel: async (providerId: string, modelId: string): Promise<ModelSwitch> => {

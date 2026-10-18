@@ -86,6 +86,14 @@ export interface RunHost extends HostBase {
   readonly sessionId: string | undefined
   /** Provider id the session runs on. */
   readonly providerId: string | undefined
+  /** Ids of the loaded providers, sorted. A frontend offers models from these. */
+  readonly providerIds: readonly string[]
+  /**
+   * Provider-qualified model ids the loaded providers declared, sorted.
+   * Frontends merge them with the catalog's list: the catalog has no entry
+   * for a custom provider.
+   */
+  readonly declaredModelIds: readonly string[]
   /** Model id the session runs on. */
   readonly modelId: string | undefined
   /**
