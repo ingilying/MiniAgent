@@ -7,12 +7,22 @@
  * define commands themselves.
  */
 
+import type { SessionInfo } from '../session/manager.js'
+
 /** What a command can do: quit the frontend or print into the transcript. */
 export interface CommandContext {
   /** Built-in and registered commands, for `help`. */
   readonly commands: readonly CommandInfo[]
   /** Session the command acts on. */
   readonly current: SessionIdentity
+  /** Id of that session within the store. */
+  readonly sessionId: string | undefined
+  /** Sessions stored for this project directory, newest first. */
+  readonly sessions: readonly SessionInfo[]
+  /** Switches the frontend to a stored session. Rejects for an unknown id. */
+  resume(id: string): Promise<void>
+  /** Opens a fresh session and switches the frontend to it. Returns its id. */
+  newSession(): Promise<string>
   /** Ids of the loaded providers, sorted. A provider outside this set is unknown. */
   readonly providers: readonly string[]
   /** Provider-qualified model ids the cached catalog lists for the loaded providers. */
@@ -205,6 +215,80 @@ export const modelsCommand: Command = {
     }
     ctx.notice([`Models (${ordered.length}):`, ...lines].join('\n'))
   },
+}
+
+/** Starts a fresh session in this directory. */
+export const newCommand: Command = {
+  name: 'new',
+  description: 'Start a new session.',
+  async run(args, ctx): Promise<void> {
+    if (args.length > 0) {
+      ctx.notice('Usage: /new')
+      return
+    }
+    const id = await ctx.newSession()
+    ctx.notice(`Started ${id}.`)
+  },
+}
+
+/** Caps one `/resume` listing; a prefix narrows it. */
+const MAX_LISTED_SESSIONS = 20
+
+/** Switches the frontend to another stored session of this directory. */
+export const resumeCommand: Command = {
+  name: 'resume',
+  description: 'Switch to a stored session. Usage: /resume [id-or-prefix]',
+  aliases: ['sessions'],
+  async run(args, ctx): Promise<void> {
+    if (args.length > 1) {
+      ctx.notice('Usage: /resume [id-or-prefix]')
+      return
+    }
+    const [wanted] = args
+    if (wanted === undefined) {
+      listSessions(ctx)
+      return
+    }
+    const matches = ctx.sessions.filter(
+      (session) => session.id === wanted || session.id.startsWith(wanted),
+    )
+    const target =
+      matches.find((session) => session.id === wanted) ??
+      (matches.length === 1 ? matches[0] : undefined)
+    if (target === undefined) {
+      if (matches.length === 0) {
+        ctx.notice(`Unknown session "${wanted}". /resume lists them.`)
+      } else {
+        const listed = matches.slice(0, MAX_LISTED_SESSIONS).map((session) => `  ${session.id}`)
+        ctx.notice([`"${wanted}" matches ${matches.length} sessions:`, ...listed].join('\n'))
+      }
+      return
+    }
+    if (target.id === ctx.sessionId) {
+      ctx.notice(`Already on ${target.id}.`)
+      return
+    }
+    await ctx.resume(target.id)
+    ctx.notice(`Resumed ${target.id}.`)
+  },
+}
+
+/** Prints the stored sessions of this directory, newest first. */
+function listSessions(ctx: CommandContext): void {
+  if (ctx.sessions.length === 0) {
+    ctx.notice('No stored sessions in this directory.')
+    return
+  }
+  const shown = ctx.sessions.slice(0, MAX_LISTED_SESSIONS)
+  const lines = shown.map((session) => {
+    const marker = session.id === ctx.sessionId ? '*' : ' '
+    const title = session.title ?? '(untitled)'
+    return `  ${marker} ${session.id}  ${title}  ${session.updatedAt.slice(0, 16).replace('T', ' ')}`
+  })
+  if (ctx.sessions.length > shown.length) {
+    lines.push(`  … ${ctx.sessions.length - shown.length} more.`)
+  }
+  ctx.notice(['Sessions:', ...lines].join('\n'))
 }
 
 /** Current provider first, then alphabetical: the order the model menu uses. */

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import type { ModelMessage } from 'ai'
+
 import type { AgentEvent } from '../../../../src/agent/agent.js'
 import {
+  appendHistory,
   applyEvent,
   applyNotice,
   applyUser,
@@ -221,6 +224,44 @@ describe('TUI transcript', () => {
     state = applyEvent(state, event('error', { error: new Error('boom') }), makeId)
 
     expect(kinds(state)).toEqual(['art', 'welcome', 'user', 'error'])
+  })
+
+  it('replays stored messages, pairing tool calls with results', () => {
+    const makeId = ids()
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hello' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'reading' },
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'read', input: { path: 'a' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'read',
+            output: { type: 'json', value: { lines: 2 } },
+          },
+        ],
+      },
+      { role: 'assistant', content: 'done' },
+    ]
+
+    const state = appendHistory(emptyTranscript(), messages, makeId)
+
+    expect(kinds(state)).toEqual(['user', 'assistant', 'tool', 'assistant'])
+    expect(state.lines[2]).toMatchObject({
+      kind: 'tool',
+      toolName: 'read',
+      input: { path: 'a' },
+      output: { lines: 2 },
+      isError: false,
+      spaced: true,
+    })
   })
 
   it('appends command output as system rows', () => {

@@ -17,9 +17,12 @@ import {
   helpCommand,
   modelCommand,
   modelsCommand,
+  newCommand,
   quitCommand,
+  resumeCommand,
 } from '../../../../src/commands/commands.js'
 import { Context } from '../../../../src/session/context.js'
+import { displayWidth } from '../../../../src/plugins/builtin/tui/width.js'
 import { createBasicTools } from '../../../../src/plugins/builtin/basic-tools/tools.js'
 import { TuiApp } from '../../../../src/plugins/builtin/tui/app.js'
 import type { RunHost } from '../../../../src/plugins/types.js'
@@ -60,8 +63,8 @@ function fakeStdin(): PassThrough & { isTTY: boolean } {
 
 /** Matches ANSI escape sequences without a literal control char in source. */
 function stripAnsi(): RegExp {
-  // eslint-disable-next-line no-control-regex -- ESC has no readable spelling
-  return new RegExp('\x1b\\[[0-9;?]*[a-zA-Z]|\x1b[()][AB0]', 'g')
+  // eslint-disable-next-line no-control-regex -- ESC/BEL have no readable spelling
+  return new RegExp('\x1b\\[[0-9;?]*[a-zA-Z]|\x1b[()][AB0]|\x1b\\][^\x07]*\x07', 'g')
 }
 
 /** Latest highlighted menu row: frames accumulate, so only the tail counts. */
@@ -72,7 +75,10 @@ function lastHighlight(frames: string): string | undefined {
 
 interface Harness {
   host: RunHost
+  titleSession: ReturnType<typeof vi.fn>
   stdin: PassThrough
+  /** Raw output, escape sequences included. */
+  raw: () => string
   frames: () => string
   write: (text: string) => Promise<void>
   writeRaw: (text: string) => Promise<void>
@@ -92,6 +98,10 @@ async function harness(
     model?: MockLanguageModelV4
     /** Tools the test agent may call. */
     tools?: ToolSet
+    /** Sessions the manager can hand out, keyed by id. */
+    storedSessions?: Map<string, Context>
+    /** Titles the session manager reports, keyed by id. */
+    titles?: Map<string, string>
   } = {},
 ): Promise<Harness> {
   const defaultModel = new MockLanguageModelV4({
@@ -116,6 +126,30 @@ async function harness(
       warnings: [],
     }),
   })
+  const stored = new Map(options.storedSessions ?? [])
+  const sessions = {
+    listHistory: (): Array<{
+      id: string
+      cwd: string
+      createdAt: string
+      updatedAt: string
+      title?: string
+    }> =>
+      [...stored.keys()].map((id) => ({
+        id,
+        cwd: directory,
+        createdAt: '2026-10-18T19:00:00.000Z',
+        updatedAt: '2026-10-18T19:00:00.000Z',
+        title: options.titles?.get(id),
+      })),
+    get: async (id: string): Promise<Context | undefined> => stored.get(id),
+    createSession: async (): Promise<Context> => {
+      const created = new Context([], { contextWindow: 1000 })
+      stored.set(created.id, created)
+      return created
+    },
+  } as unknown as RunHost['sessions']
+
   const context = new Context([], { contextWindow: 1000 })
   const model = options.model ?? defaultModel
   const agent = new Agent({ model, context, tools: options.tools, maxSteps: 4 })
@@ -126,8 +160,12 @@ async function harness(
   commands.register(helpCommand)
   commands.register(modelCommand)
   commands.register(modelsCommand)
+  commands.register(resumeCommand)
+  commands.register(newCommand)
+  const titleSession = vi.fn(async () => {})
   const host = {
     agent,
+    titleSession,
     agentFor: (): Agent => agent,
     agents: new AgentsManager(),
     context,
@@ -149,7 +187,7 @@ async function harness(
     },
     dataDirectory: directory,
     cwd: directory,
-    sessions: {} as never,
+    sessions,
     commands,
     logger: pino({ level: 'silent', base: undefined }, sink()),
   } satisfies RunHost
@@ -175,7 +213,9 @@ async function harness(
   const frames = (): string => chunks.join('').replace(stripAnsi(), '')
   return {
     host,
+    titleSession,
     stdin,
+    raw: (): string => chunks.join(''),
     frames,
     write: async (text: string): Promise<void> => {
       // One packet per char, consumed before the next lands: Ink parses
@@ -280,13 +320,19 @@ describe('TuiApp', () => {
       expect(lastHighlight(ui.frames())).toBe('❯ /models')
       await ui.writeRaw('\x1b[B')
       await ui.settle()
+      expect(lastHighlight(ui.frames())).toBe('❯ /new')
+      await ui.writeRaw('\x1b[B')
+      await ui.settle()
       expect(lastHighlight(ui.frames())).toBe('❯ /quit')
+      await ui.writeRaw('\x1b[B')
+      await ui.settle()
+      expect(lastHighlight(ui.frames())).toBe('❯ /resume')
       await ui.writeRaw('\x1b[B')
       await ui.settle()
       expect(lastHighlight(ui.frames())).toBe('❯ /help')
       await ui.writeRaw('\x1b[A')
       await ui.settle()
-      expect(lastHighlight(ui.frames())).toBe('❯ /quit')
+      expect(lastHighlight(ui.frames())).toBe('❯ /resume')
     } finally {
       await ui.stop()
     }
@@ -481,6 +527,197 @@ describe('TuiApp', () => {
       expect(frame).toContain('⏺ write(')
       expect(frame).toContain('⎿ 5 bytes')
       expect(frame).toContain('● Wrote it.')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('titles the session from its first message, once', async () => {
+    const ui = await harness()
+    try {
+      await ui.ready()
+      await ui.write('rename the session list')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle(300)
+      expect(ui.titleSession).toHaveBeenCalledTimes(1)
+      expect(ui.titleSession).toHaveBeenCalledWith(ui.host.context.id, 'rename the session list')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('names the terminal after the session', async () => {
+    const ui = await harness()
+    try {
+      await ui.ready()
+      // Boot names the tab before any conversation starts.
+      expect(ui.raw()).toContain('\x1b]0;MiniAgent\x07')
+
+      await ui.write('rename the session list')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle(300)
+      // eslint-disable-next-line no-control-regex -- OSC ends with BEL
+      const pattern = /\x1b\]0;([^\x07]*)\x07/g
+      const titles = [...ui.raw().matchAll(pattern)].map((match) => match[1])
+      expect(titles.at(-1)).toBe('rename the session list')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('scrolls a long model menu as the highlight moves', async () => {
+    const models = Object.fromEntries(
+      Array.from({ length: 20 }, (_unused, index) => [
+        `model-${String(index).padStart(2, '0')}`,
+        { limit: {} },
+      ]),
+    )
+    await writeFile(
+      join(directory, 'models.json'),
+      JSON.stringify({
+        url: 'https://models.dev/api.json',
+        at: Date.now(),
+        catalog: { openai: { models } },
+      }),
+      'utf8',
+    )
+    const ui = await harness()
+    try {
+      await ui.ready()
+      await ui.write('/model model-')
+      await ui.settle(300)
+      const first = ui.frames()
+      expect(first).toContain('openai/model-07')
+      expect(first).toContain('↓ 12 more')
+
+      for (let step = 0; step < 10; step += 1) {
+        await ui.writeRaw('\x1b[B')
+        await ui.settle(80)
+      }
+      await ui.settle(200)
+      const moved = ui.frames()
+      // The window followed the highlight past the first eight rows.
+      expect(moved).toContain('↑ 6 more')
+      expect(moved).toContain('❯ openai/model-10')
+      expect(moved).toContain('openai/model-13')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('offers stored sessions in the /resume menu', async () => {
+    const earlier = new Context([{ role: 'user', content: 'earlier question' }], {
+      contextWindow: 1000,
+    })
+    const ui = await harness({
+      storedSessions: new Map([[earlier.id, earlier]]),
+      titles: new Map([[earlier.id, 'Fix login bug']]),
+    })
+    try {
+      await ui.ready()
+      await ui.write('/resume')
+      await ui.settle(200)
+      expect(ui.frames()).toContain('Fix login bug')
+
+      await ui.write('\r')
+      await ui.settle()
+      expect(ui.frames()).toContain(`/resume ${earlier.id} `)
+
+      await ui.write('\r')
+      await ui.settle(400)
+      expect(ui.frames()).toContain('earlier question')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('starts a fresh session with /new', async () => {
+    const ui = await harness()
+    try {
+      await ui.ready()
+      await ui.write('/new')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle()
+      await ui.write('\r')
+      await ui.settle(400)
+      expect(ui.frames()).toContain('Started ')
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('resumes a stored session and replays its history', async () => {
+    const earlier = new Context(
+      [
+        { role: 'user', content: 'earlier question' },
+        { role: 'assistant', content: 'earlier answer' },
+      ],
+      { contextWindow: 1000 },
+    )
+    const ui = await harness({ storedSessions: new Map([[earlier.id, earlier]]) })
+    try {
+      await ui.ready()
+      await ui.write(`/resume ${earlier.id}\r`)
+      await ui.settle(400)
+      const frame = ui.frames()
+      expect(frame).toContain('earlier question')
+      expect(frame).toContain('earlier answer')
+      expect(frame).toContain(`Resumed ${earlier.id}.`)
+    } finally {
+      await ui.stop()
+    }
+  })
+
+  it('keeps a resumed tool box inside the terminal', async () => {
+    const command = 'ls -l bun-vs-nodejs.md && head -20 bun-vs-nodejs.md'
+    const long =
+      '包管理器 | 内置 bun install，极快（全局缓存 + 硬链接），兼容 package.json 与 node_modules | 自带 npm，也可用 pnpm / yarn '.repeat(
+        2,
+      )
+    const messages = [
+      { role: 'user' as const, content: 'go' },
+      {
+        role: 'assistant' as const,
+        content: [
+          { type: 'tool-call' as const, toolCallId: 'c1', toolName: 'shell', input: { command } },
+        ],
+      },
+      {
+        role: 'tool' as const,
+        content: [
+          {
+            type: 'tool-result' as const,
+            toolCallId: 'c1',
+            toolName: 'shell',
+            output: {
+              type: 'json' as const,
+              value: { command, exitCode: 0, stdout: `${long}\n`, stderr: '' },
+            },
+          },
+        ],
+      },
+    ]
+    const earlier = new Context(messages, { contextWindow: 1000 })
+    const ui = await harness({ storedSessions: new Map([[earlier.id, earlier]]) })
+    try {
+      await ui.ready()
+      await ui.write(`/resume ${earlier.id}\r`)
+      await ui.settle(500)
+      const rows = ui.frames().split('\n')
+      const shell = rows.findIndex((line) => line.includes('⏺ shell'))
+      expect(shell).toBeGreaterThanOrEqual(0)
+      const box = rows
+        .slice(shell)
+        .filter((line) => line.startsWith('│') || line.startsWith('╭') || line.startsWith('╰'))
+      expect(box.length).toBeGreaterThan(3)
+      // Every border row ends in the same column, inside the 100-column frame.
+      const widths = new Set(box.map((line) => displayWidth(line)))
+      expect(widths.size).toBe(1)
+      expect(Math.max(...widths)).toBeLessThan(100)
+      expect(box.join('\n')).toContain('…')
     } finally {
       await ui.stop()
     }

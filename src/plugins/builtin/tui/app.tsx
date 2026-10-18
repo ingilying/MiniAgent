@@ -8,6 +8,7 @@ import type { RunHost } from '../../types.js'
 import type { Agent } from '../../../agent/agent.js'
 import { parseCommand, type CommandContext, type ModelSwitch } from '../../../commands/commands.js'
 import { listCachedModels } from '../../../models/catalog.js'
+import { titleFromMessage } from '../../../session/title.js'
 import {
   CandidateMenu,
   InputBox,
@@ -17,8 +18,10 @@ import {
   TranscriptRow,
 } from './components.js'
 import { contextUsage } from './format.js'
+import { DEFAULT_TERMINAL_TITLE, useTerminalTitle } from './terminal.js'
 import { useMenu } from './menu.js'
 import {
+  appendHistory,
   applyEvent,
   applyNotice,
   applyUser,
@@ -49,7 +52,24 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   const [hasTyped, setHasTyped] = useState(false)
   const [pending, setPending] = useState(0)
   const [agent, setAgent] = useState(host.agent)
+  const [context, setContext] = useState(host.context)
+  const [sessionId, setSessionId] = useState(host.sessionId)
   const [modelIds, setModelIds] = useState<string[]>(() => [...host.declaredModelIds])
+  /** Sessions this frontend already asked a title for. */
+  const titled = useRef(new Set<string>())
+  const setTerminalTitle = useTerminalTitle()
+
+  /** Stored title of a session, when it has one. */
+  const titleOf = (id: string | undefined): string | undefined =>
+    id === undefined
+      ? undefined
+      : host.sessions.listHistory().find((session) => session.id === id)?.title
+
+  // The terminal carries the session name, like a browser tab.
+  useEffect(() => {
+    setTerminalTitle(titleOf(host.sessionId) ?? DEFAULT_TERMINAL_TITLE)
+    // Once, at mount: later updates come from /resume, /new, and the first message.
+  }, [])
 
   // Effect dependencies compare arrays by identity, so these keys carry the
   // content: a frontend that rebuilds the host per render must not refetch.
@@ -74,11 +94,12 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
     }
   }, [host.dataDirectory, providerKey, declaredKey])
 
-  const { menu, hidden, selected, selectedItem, setSelected } = useMenu(
+  const { menu, above, below, selected, selectedItem, move } = useMenu(
     input,
     host.commands.list(),
     modelIds,
-    host.context.providerId,
+    context.providerId,
+    host.sessions.listHistory(),
   )
 
   useEffect(
@@ -95,11 +116,58 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   const submit = (text: string): void => {
     setTranscript((previous) => applyUser(previous, makeId, text))
     setPending((count) => count + 1)
+    // The first message names the session: store a title before the run.
+    if (context.messageCount === 0 && !titled.current.has(context.id)) {
+      titled.current.add(context.id)
+      const local = titleFromMessage(text) || DEFAULT_TERMINAL_TITLE
+      setTerminalTitle(local)
+      // The model title lands later and replaces it in the tab as well.
+      void host
+        .titleSession(context.id, text)
+        .then(() => setTerminalTitle(titleOf(context.id) ?? local))
+        .catch(() => {})
+    }
     agent.submit(text)
   }
 
   const notice = (text: string): void => {
     setTranscript((previous) => applyNotice(previous, makeId, text))
+  }
+
+  /**
+   * Attaches the frontend to a stored session: its context becomes current,
+   * its agent is built on its own model, and its history is replayed into the
+   * transcript so the conversation continues where it stopped.
+   */
+  const openSession = async (id: string): Promise<void> => {
+    const target = await host.sessions.get(id)
+    if (target === undefined) {
+      throw new Error(`Unknown session "${id}".`)
+    }
+    const next = host.agents.get(target.id) ?? host.agentFor(target)
+    host.agents.set(target, next)
+    setAgent(next)
+    setContext(target)
+    setSessionId(target.id)
+    setTerminalTitle(titleOf(target.id) ?? DEFAULT_TERMINAL_TITLE)
+    setTranscript((previous) => appendHistory(previous, target.messages, makeId))
+  }
+
+  /**
+   * Opens a fresh session and points the frontend at it. Rows already printed
+   * stay: Ink's `<Static>` only ever appends, so the transcript cannot shrink
+   * without silently swallowing every later row. The command's own notice
+   * marks where the new session starts.
+   */
+  const startSession = async (): Promise<string> => {
+    const context = await host.sessions.createSession()
+    const next = host.agentFor(context)
+    host.agents.set(context, next)
+    setAgent(next)
+    setContext(context)
+    setSessionId(context.id)
+    setTerminalTitle(DEFAULT_TERMINAL_TITLE)
+    return context.id
   }
 
   const runCommand = (text: string): void => {
@@ -110,16 +178,25 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       notice(`Unknown command "${text}". /help lists commands.`)
       return
     }
-    const ctx = buildCommandContext(host, modelIds, agent, setAgent, notice, exit)
+    const ctx = buildCommandContext(host, {
+      context,
+      sessionId,
+      knownModels: modelIds,
+      agent,
+      setAgent,
+      openSession,
+      startSession,
+      notice,
+      quit: exit,
+    })
     void Promise.resolve(command.run(parsed.args, ctx)).catch((error: unknown) =>
       notice(error instanceof Error ? error.message : String(error)),
     )
   }
 
   useInput((chars, key) => {
-    if ((key.upArrow || key.downArrow) && menu.length > 0) {
-      const step = key.downArrow ? 1 : menu.length - 1
-      setSelected((index) => (index + step) % menu.length)
+    if (key.upArrow || key.downArrow) {
+      move(key.downArrow ? 1 : -1)
       return
     }
     if (key.tab && selectedItem !== undefined) {
@@ -131,9 +208,12 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
       if (text.length === 0) {
         return
       }
-      // Menu open: Enter selects the highlight into the input box.
-      // Menu closed: Enter sends.
-      if (selectedItem !== undefined) {
+      // Menu open: Enter selects the highlight into the input box, unless the
+      // input already spells that selection out (a typed-out id): then send.
+      if (
+        selectedItem !== undefined &&
+        !(selectedItem.submit === true && selectedItem.fill.trim() === text)
+      ) {
         setInput(selectedItem.fill)
         return
       }
@@ -167,7 +247,9 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
   })
 
   return (
-    <Box flexDirection="column">
+    // One column of right padding: a bordered row must not end in the last
+    // terminal column, where autowrap breaks the frame.
+    <Box flexDirection="column" paddingRight={1}>
       <Static items={[...transcript.lines]}>
         {(line: TranscriptLine) => <TranscriptRow key={line.id} line={line} />}
       </Static>
@@ -177,18 +259,23 @@ export function TuiApp({ host }: { host: RunHost }): ReactElement {
         <LiveToolCall key={tool.toolCallId} tool={tool} />
       ))}
       <InputBox input={input} hasTyped={hasTyped} pending={pending} />
-      {menu.length > 0 && <CandidateMenu items={menu} selected={selected} />}
-      {hidden > 0 && (
+      {above > 0 && (
         <Box paddingX={1}>
-          <Text dimColor>{`  … ${hidden} more. Keep typing to narrow.`}</Text>
+          <Text dimColor>{`  ↑ ${above} more`}</Text>
+        </Box>
+      )}
+      {menu.length > 0 && <CandidateMenu items={menu} selected={selected} />}
+      {below > 0 && (
+        <Box paddingX={1}>
+          <Text dimColor>{`  ↓ ${below} more. Keep typing to narrow.`}</Text>
         </Box>
       )}
       <Box paddingX={1} justifyContent="space-between">
         <Text dimColor>
-          {contextUsage(host.context)}
+          {contextUsage(context)}
           {pending > 0 ? ` · working (${pending})…` : ''}
         </Text>
-        <Text dimColor>{host.context.modelId ?? '?'}</Text>
+        <Text dimColor>{context.modelId ?? '?'}</Text>
       </Box>
     </Box>
   )
@@ -199,29 +286,39 @@ function mergeModelIds(declared: readonly string[], cached: readonly string[]): 
   return [...new Set([...declared, ...cached])].sort()
 }
 
-/** Wires a slash command to this TUI: quit exits, notice prints, model switches agents. */
-function buildCommandContext(
-  host: RunHost,
-  knownModels: readonly string[],
-  agent: Agent,
-  setAgent: (agent: Agent) => void,
-  notice: (text: string) => void,
-  quit: () => void,
-): CommandContext {
+/** What the command context needs from the TUI's current session. */
+interface CommandWiring {
+  context: RunHost['context']
+  sessionId: string | undefined
+  knownModels: readonly string[]
+  agent: Agent
+  setAgent: (agent: Agent) => void
+  openSession: (id: string) => Promise<void>
+  startSession: () => Promise<string>
+  notice: (text: string) => void
+  quit: () => void
+}
+
+/** Wires a slash command to this TUI: quit exits, notice prints, model and session switch. */
+function buildCommandContext(host: RunHost, wiring: CommandWiring): CommandContext {
   return {
     commands: host.commands.list(),
-    current: { providerId: host.context.providerId, modelId: host.context.modelId },
+    current: { providerId: wiring.context.providerId, modelId: wiring.context.modelId },
+    sessionId: wiring.sessionId,
+    sessions: host.sessions.listHistory(),
     providers: host.providerIds,
-    knownModels,
-    quit,
-    notice,
+    knownModels: wiring.knownModels,
+    quit: wiring.quit,
+    notice: wiring.notice,
+    resume: wiring.openSession,
+    newSession: wiring.startSession,
     switchModel: async (providerId: string, modelId: string): Promise<ModelSwitch> => {
       const { agent: switchedAgent, ...switched } = await host.switchModel(
-        host.context,
+        wiring.context,
         providerId,
         modelId,
       )
-      setAgent(switchedAgent)
+      wiring.setAgent(switchedAgent)
       return switched
     },
   }

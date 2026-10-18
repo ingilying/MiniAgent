@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 
-import { NoSuchProviderError } from 'ai'
+import { NoSuchProviderError, generateText } from 'ai'
 import type { ToolSet } from 'ai'
 import type { Logger } from 'pino'
 
@@ -12,9 +12,11 @@ import {
   helpCommand,
   modelCommand,
   modelsCommand,
+  newCommand,
   quitCommand,
+  resumeCommand,
 } from '../commands/commands.js'
-import { DEFAULT_MODEL, DEFAULT_PROVIDER, SYSTEM_PROMPT } from '../defaults.js'
+import { DEFAULT_MODEL, DEFAULT_PROVIDER, SYSTEM_PROMPT, TITLE_PROMPT } from '../defaults.js'
 import { defaultLogger, renameFinishedLog } from '../logging/logger.js'
 import { loadProviders } from '../models/providers.js'
 import type { Providers } from '../models/providers.js'
@@ -22,6 +24,7 @@ import { PluginManager } from '../plugins/manager.js'
 import type { Plugin, SwitchResult } from '../plugins/types.js'
 import type { Context } from '../session/context.js'
 import { SessionManager } from '../session/manager.js'
+import { titleFromAnswer, titleFromMessage } from '../session/title.js'
 import { FileContextStore } from '../session/store.js'
 import { AgentFactory, modelOf } from './agent-factory.js'
 import type { AppConfig } from './config.js'
@@ -32,6 +35,8 @@ import { defaultDataDirectory } from './paths.js'
 import { mergeEnvFile, readConfigFile } from './startup.js'
 
 export { defaultDataDirectory, isReleaseBuild } from './paths.js'
+
+/** System prompt for the model-written session title. */
 export type { AppOptions } from './options.js'
 
 /**
@@ -122,7 +127,14 @@ export class App {
       dataDirectory: this.dataDirectory,
       logger: this.moduleLogger('plugin-manager'),
     })
-    this.commands.registerAll([quitCommand, helpCommand, modelCommand, modelsCommand])
+    this.commands.registerAll([
+      quitCommand,
+      helpCommand,
+      modelCommand,
+      modelsCommand,
+      resumeCommand,
+      newCommand,
+    ])
   }
 
   /** Loaded plugins in load order, built-ins first. */
@@ -215,6 +227,49 @@ export class App {
     return result
   }
 
+  /**
+   * Titles a session from its first user message: a truncated title is stored
+   * right away, then the session's own model writes a shorter one and
+   * replaces it. Any failure (no model, network, empty answer) keeps the
+   * truncated title, so a session always has one.
+   */
+  async titleSession(id: string, firstMessage: string): Promise<void> {
+    const local = titleFromMessage(firstMessage)
+    if (local.length === 0) {
+      return
+    }
+    await this.sessions?.setTitle(id, local)
+
+    const context = this.agents?.get(id)?.context
+    const providers = this.providers
+    if (context === undefined || providers === undefined) {
+      this.logger.warn(`title generation skipped for ${id}: no agent or provider registry yet`)
+      return
+    }
+    try {
+      const result = await generateText({
+        model: providers.createModel(context.providerId, modelOf(context, this.defaultModel)),
+        system: TITLE_PROMPT,
+        prompt: firstMessage.slice(0, 2000),
+        // Reasoning models spend output tokens on thinking first; a tight
+        // cap leaves the answer empty.
+        maxOutputTokens: 128,
+      })
+      const generated = titleFromAnswer(result.text)
+      if (generated.length > 0) {
+        await this.sessions?.setTitle(id, generated)
+        return
+      }
+      this.logger.warn(
+        `title generation returned nothing for ${id} (finish: ${result.finishReason}); keeping the truncated title`,
+      )
+    } catch (error) {
+      this.logger.warn(
+        `title generation failed for ${id}: ${error instanceof Error ? error.message : String(error)}; keeping the truncated title`,
+      )
+    }
+  }
+
   /** The boot steps after the session is open. Throws on any failure. */
   private async boot(
     config: AppConfig,
@@ -299,6 +354,7 @@ export class App {
       modelId: modelOf(context, this.defaultModel),
       providerIds: providers.ids(),
       declaredModelIds: providers.declaredModels(),
+      titleSession: (id, firstMessage) => this.titleSession(id, firstMessage),
       agentFor: (session) => this.agentFor(session),
       switchModel: (session, providerId, modelId) =>
         this.switchModelFor(session, providerId, modelId),

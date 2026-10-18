@@ -1,7 +1,9 @@
-import { Box, Text, useStdout } from 'ink'
+import { Box, Text } from 'ink'
 import type { ReactElement, ReactNode } from 'react'
 
+import { useColumns } from './terminal.js'
 import { glyph, theme } from './theme.js'
+import { truncateToWidth } from './width.js'
 
 /** What a tool view draws: the call, and unless pending, its outcome. */
 export interface ToolViewProps {
@@ -30,8 +32,14 @@ const SHELL_LINES = 10
 /** Rows an edit block renders before folding. */
 const EDIT_LINES = 24
 
+/** Command lines a shell block renders before folding. */
+const COMMAND_LINES = 6
+
 /** Columns a bordered block spends on borders, padding, and line numbers. */
 const BOX_CHROME = 8
+
+/** Columns left as a margin, so a border never lands in the last terminal column. */
+const BOX_MARGIN = 4
 
 /** One rendered code line: optional number, optional diff sign, the text. */
 interface CodeRow {
@@ -202,6 +210,7 @@ export function ShellToolView({
   spaced,
 }: ToolViewProps): ReactElement {
   const width = useTextWidth()
+  const boxWidth = useBoxWidth()
   const command = stringField(input, 'command') ?? summarize(input)
   const exitCode = numberField(output, 'exitCode')
   const stdout = stringField(output, 'stdout') ?? ''
@@ -209,6 +218,7 @@ export function ShellToolView({
   const printed = lineCountOf(`${stdout}${stderr}`)
   const truncated = boolField(output, 'truncated')
   const result = preview(`${stdout}${stderr}`, SHELL_LINES, width)
+  const commands = commandLines(command, width)
   return (
     <ToolFrame
       pending={pending}
@@ -225,11 +235,13 @@ export function ShellToolView({
             }`
       }
     >
-      <Box borderStyle="round" borderDimColor flexDirection="column" paddingX={1}>
-        <Text>
-          <Text dimColor>{'$ '}</Text>
-          {command}
-        </Text>
+      <Box borderStyle="round" borderDimColor flexDirection="column" paddingX={1} width={boxWidth}>
+        {commands.map((line, index) => (
+          <Text key={index}>
+            <Text dimColor>{index === 0 ? '$ ' : '  '}</Text>
+            {line}
+          </Text>
+        ))}
         <Box
           borderStyle="single"
           borderTop
@@ -308,7 +320,13 @@ function ToolFrame({
 function CodeBox({ block }: { block: CodeBlock }): ReactElement {
   const gutter = String(block.lastNumber).length
   return (
-    <Box borderStyle="round" borderDimColor flexDirection="column" paddingX={1}>
+    <Box
+      borderStyle="round"
+      borderDimColor
+      flexDirection="column"
+      paddingX={1}
+      width={useBoxWidth()}
+    >
       {block.rows.map((row, index) => (
         <CodeRowView key={`${index}:${row.number ?? ''}`} row={row} gutter={gutter} />
       ))}
@@ -371,7 +389,7 @@ function numberedBlock(
   const lines = splitLines(text)
   const rows = lines.slice(0, max).map((line, index) => ({
     number: start + index,
-    text: truncate(line, width),
+    text: truncateToWidth(line, width),
   }))
   const lastNumber = total ?? start + Math.max(0, lines.length - 1)
   return { rows, hidden: Math.max(0, lines.length - max), lastNumber }
@@ -390,17 +408,17 @@ function editBlock(change: EditChange, width: number): CodeBlock {
   const rows: CodeRow[] = []
   const beforeStart = change.line - change.before.length
   change.before.forEach((text, index) => {
-    rows.push({ number: beforeStart + index, text: truncate(text, width) })
+    rows.push({ number: beforeStart + index, text: truncateToWidth(text, width) })
   })
   change.removed.forEach((text, index) => {
-    rows.push({ number: change.line + index, sign: '-', text: truncate(text, width) })
+    rows.push({ number: change.line + index, sign: '-', text: truncateToWidth(text, width) })
   })
   change.added.forEach((text, index) => {
-    rows.push({ number: change.line + index, sign: '+', text: truncate(text, width) })
+    rows.push({ number: change.line + index, sign: '+', text: truncateToWidth(text, width) })
   })
   const afterStart = change.line + change.added.length
   change.after.forEach((text, index) => {
-    rows.push({ number: afterStart + index, text: truncate(text, width) })
+    rows.push({ number: afterStart + index, text: truncateToWidth(text, width) })
   })
   const shown = rows.slice(0, EDIT_LINES)
   return {
@@ -454,7 +472,7 @@ function splitError(output: unknown): { summary: string; details: string[] } {
  */
 function preview(text: string, max: number, width = 100): { lines: string[]; hidden: number } {
   const all = splitLines(text)
-  const lines = all.slice(0, max).map((line) => truncate(line, width))
+  const lines = all.slice(0, max).map((line) => truncateToWidth(line, width))
   return { lines, hidden: Math.max(0, all.length - max) }
 }
 
@@ -470,8 +488,17 @@ function splitLines(text: string): string[] {
   return lines
 }
 
-function truncate(line: string, width: number): string {
-  return line.length > width ? `${line.slice(0, width - 1)}…` : line
+/**
+ * Command lines laid out for the box: `$ ` on the first, two spaces on the
+ * rest, each cut to the box width so the border cannot be pushed off screen.
+ */
+function commandLines(command: string, width: number): string[] {
+  const all = splitLines(command)
+  const shown = all.slice(0, COMMAND_LINES).map((line) => truncateToWidth(line, width - 2))
+  if (all.length > COMMAND_LINES) {
+    shown.push(`… +${all.length - COMMAND_LINES} more lines`)
+  }
+  return shown.length === 0 ? [''] : shown
 }
 
 /** Lines of a text, ignoring trailing newlines. */
@@ -484,12 +511,14 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? '' : 's'}`
 }
 
-/** Columns available inside a bordered block on this terminal. */
+/** Text columns inside a bordered block. */
 function useTextWidth(): number {
-  const { stdout } = useStdout()
-  // Ink types stdout as a bare WritableStream; a terminal carries columns.
-  const columns = (stdout as { columns?: number }).columns ?? 80
-  return Math.max(20, columns - BOX_CHROME)
+  return Math.max(20, useColumns() - BOX_CHROME)
+}
+
+/** Width of a bordered block itself: never the full terminal. */
+export function useBoxWidth(): number {
+  return Math.max(24, useColumns() - BOX_MARGIN)
 }
 
 function changeOf(output: unknown): EditChange | undefined {

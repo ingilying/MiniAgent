@@ -86,6 +86,12 @@ export interface RunHost extends HostBase {
   readonly sessionId: string | undefined
   /** Provider id the session runs on. */
   readonly providerId: string | undefined
+  /**
+   * Titles a session from its first user message. A truncated title is
+   * stored immediately, then the session's model writes a shorter one.
+   * Failures keep the truncated title.
+   */
+  titleSession(id: string, firstMessage: string): Promise<void>
   /** Ids of the loaded providers, sorted. A frontend offers models from these. */
   readonly providerIds: readonly string[]
   /**

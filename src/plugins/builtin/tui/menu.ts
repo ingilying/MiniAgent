@@ -1,37 +1,30 @@
-import { useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useRef, useState } from 'react'
 
 import type { CommandInfo } from '../../../commands/commands.js'
+import type { SessionInfo } from '../../../session/manager.js'
 
 /** One selectable menu row: label, dim hint, and the text Tab/Enter fills. */
 export interface MenuItem {
   readonly label: string
   readonly hint: string
   readonly fill: string
+  /**
+   * Enter sends the input when it already spells this row out. True for
+   * values (model ids, session ids); false for command names, which are
+   * usually followed by arguments.
+   */
+  readonly submit?: boolean
 }
 
-/** Maximum menu rows; typing narrows beyond it. */
-const MAX_MENU_ITEMS = 15
-
-/** Rows a menu offers. `hidden` counts matches past the cap, so a frontend can say so. */
-export interface MenuList {
-  readonly items: MenuItem[]
-  readonly hidden: number
-}
-
-/** Caps a matched list and counts the rows beyond the cap. */
-function capMenu(items: MenuItem[]): MenuList {
-  return {
-    items: items.slice(0, MAX_MENU_ITEMS),
-    hidden: Math.max(0, items.length - MAX_MENU_ITEMS),
-  }
-}
+/** Rows a menu shows at once; longer lists scroll with the highlight. */
+const VISIBLE_MENU_ITEMS = 8
 
 /**
  * Command menu for a slash prefix: canonical names whose name or alias
  * starts with the partial text, case-insensitively, alphabetical.
  * The registry only lists; all filtering lives here.
  */
-export function commandMenu(commands: readonly CommandInfo[], partial: string): MenuList {
+export function commandMenu(commands: readonly CommandInfo[], partial: string): MenuItem[] {
   const lower = partial.toLowerCase()
   const matched: MenuItem[] = []
   const seen = new Set<string>()
@@ -49,7 +42,7 @@ export function commandMenu(commands: readonly CommandInfo[], partial: string): 
       })
     }
   }
-  return capMenu(matched)
+  return matched
 }
 
 /**
@@ -57,7 +50,7 @@ export function commandMenu(commands: readonly CommandInfo[], partial: string): 
  * bare id or full form starts with the partial text, case-insensitively.
  * The current provider's models sort first, then alphabetical.
  */
-export function modelMenu(ids: readonly string[], provider: string, partial: string): MenuList {
+export function modelMenu(ids: readonly string[], provider: string, partial: string): MenuItem[] {
   const lower = partial.toLowerCase()
   const matched = ids.filter((id) => {
     const slash = id.indexOf('/')
@@ -69,16 +62,81 @@ export function modelMenu(ids: readonly string[], provider: string, partial: str
     const bOurs = b.startsWith(`${provider}/`) ? 0 : 1
     return aOurs - bOurs || a.localeCompare(b)
   })
-  return capMenu(matched.map((id) => ({ label: id, hint: '', fill: `/model ${id} ` })))
+  return matched.map((id) => ({ label: id, hint: '', fill: `/model ${id} `, submit: true }))
+}
+
+/**
+ * Session menu for `/resume [partial]`: stored sessions newest first, shown
+ * by title, filtered by id prefix or title substring. Selecting one fills the
+ * input with the full id, so the command itself stays the single resolver.
+ */
+export function sessionMenu(sessions: readonly SessionInfo[], partial: string): MenuItem[] {
+  const lower = partial.toLowerCase()
+  return sessions
+    .filter(
+      (session) =>
+        lower.length === 0 ||
+        session.id.toLowerCase().includes(lower) ||
+        (session.title ?? '').toLowerCase().includes(lower),
+    )
+    .map((session) => ({
+      label: session.title ?? '(untitled)',
+      hint: `${session.id.slice(0, 8)} · ${session.updatedAt.slice(0, 16).replace('T', ' ')}`,
+      fill: `/resume ${session.id} `,
+      submit: true,
+    }))
+}
+
+/** The visible slice of a menu: rows, the highlight inside it, and the rest. */
+export interface MenuWindow {
+  readonly items: readonly MenuItem[]
+  /** Highlight index inside `items`. */
+  readonly selected: number
+  /** Matches above the window. */
+  readonly above: number
+  /** Matches below the window. */
+  readonly below: number
+}
+
+/**
+ * Slides a window over the matches so the highlight stays visible. The
+ * window sits at an edge until the highlight reaches its middle, then
+ * follows the highlight one row per step.
+ */
+export function menuWindow(
+  items: readonly MenuItem[],
+  selected: number,
+  visible = VISIBLE_MENU_ITEMS,
+): MenuWindow {
+  if (items.length === 0) {
+    return { items: [], selected: 0, above: 0, below: 0 }
+  }
+  const index = ((selected % items.length) + items.length) % items.length
+  const start = Math.min(
+    Math.max(0, index - Math.floor(visible / 2)),
+    Math.max(0, items.length - visible),
+  )
+  const end = Math.min(items.length, start + visible)
+  return {
+    items: items.slice(start, end),
+    selected: index - start,
+    above: start,
+    below: items.length - end,
+  }
 }
 
 export interface MenuSelection {
-  readonly menu: MenuItem[]
-  /** Matches past the cap, when the menu is truncated. */
-  readonly hidden: number
+  /** Visible rows of the open menu. */
+  readonly menu: readonly MenuItem[]
+  /** Matches hidden above and below the visible rows. */
+  readonly above: number
+  readonly below: number
+  /** Highlight index inside `menu`. */
   readonly selected: number
+  /** The highlighted row of the whole list. */
   readonly selectedItem: MenuItem | undefined
-  readonly setSelected: Dispatch<SetStateAction<number>>
+  /** Moves the highlight, wrapping at both ends. */
+  move(delta: number): void
 }
 
 /**
@@ -91,30 +149,47 @@ export function useMenu(
   commands: readonly CommandInfo[],
   modelIds: readonly string[],
   provider: string,
+  sessions: readonly SessionInfo[] = [],
 ): MenuSelection {
+  const resumePartial = /^\/(?:resume|sessions)(?:\s+(\S*))?$/i.exec(input)
   const commandPartial = /^\/(\S*)$/.exec(input)?.[1]
   const modelPartial = /^\/model\s+(\S*)$/.exec(input)?.[1]
-  const list: MenuList =
-    commandPartial !== undefined
-      ? commandMenu(commands, commandPartial)
-      : modelPartial !== undefined
-        ? modelMenu(modelIds, provider, modelPartial)
-        : { items: [], hidden: 0 }
-  const menu = list.items
+  const items =
+    resumePartial !== null
+      ? sessionMenu(sessions, resumePartial[1] ?? '')
+      : commandPartial !== undefined
+        ? commandMenu(commands, commandPartial)
+        : modelPartial !== undefined
+          ? modelMenu(modelIds, provider, modelPartial)
+          : []
 
   const [selected, setSelected] = useState(0)
-  const menuKey = `${commandPartial ?? ''}|${modelPartial ?? ''}|${menu.map((item) => item.label).join(',')}`
+  // Contents key: partials plus the ends of the list, so a refetch or a new
+  // prefix restarts the highlight without hashing every label.
+  const menuKey = `${input}|${items.length}|${items[0]?.label ?? ''}|${items.at(-1)?.label ?? ''}`
   const lastMenuKey = useRef(menuKey)
   if (lastMenuKey.current !== menuKey) {
     lastMenuKey.current = menuKey
     setSelected(0)
   }
-  const selectedItem = menu.length === 0 ? undefined : menu[selected % menu.length]
+
+  const window = menuWindow(items, selected)
+  const selectedItem =
+    items.length === 0
+      ? undefined
+      : items[((selected % items.length) + items.length) % items.length]
+
   return {
-    menu,
-    hidden: list.hidden,
-    selected: menu.length === 0 ? 0 : selected % menu.length,
+    menu: window.items,
+    above: window.above,
+    below: window.below,
+    selected: window.selected,
     selectedItem,
-    setSelected,
+    move: (delta: number): void => {
+      if (items.length === 0) {
+        return
+      }
+      setSelected((index) => (index + delta + items.length) % items.length)
+    },
   }
 }

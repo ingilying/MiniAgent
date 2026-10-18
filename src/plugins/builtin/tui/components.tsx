@@ -189,18 +189,18 @@ export function CandidateMenu({
   items,
   selected,
 }: {
-  items: MenuItem[]
+  items: readonly MenuItem[]
   selected: number
 }): ReactElement {
   return (
     <Box paddingX={1} flexDirection="column">
       {items.map((item, index) =>
         index === selected ? (
-          <Text key={item.label} bold color={theme.accent}>
+          <Text key={`${index}:${item.label}`} bold color={theme.accent}>
             {`❯ ${item.label}${item.hint.length > 0 ? ` — ${item.hint}` : ''}`}
           </Text>
         ) : (
-          <Text key={item.label} dimColor>
+          <Text key={`${index}:${item.label}`} dimColor>
             {`  ${item.label}${item.hint.length > 0 ? ` — ${item.hint}` : ''}`}
           </Text>
         ),

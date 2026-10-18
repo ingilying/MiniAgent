@@ -279,6 +279,10 @@ true })` rewrites the whole history as one `snapshot` record instead;
 - A history file that exists but cannot be read is quarantined aside
   (`<id>.json.corrupt-<timestamp>`) instead of loading as empty, and the
   session starts fresh with a warning. Missing files still mean empty.
+- The first user message titles the session: its first line is stored right
+  away as a short title, and the session's own model replaces it with a
+  shorter one when it answers. A failed or empty answer keeps the truncated
+  title. `/resume` lists the titles.
 - `Context.load()` prefers the stored provider and model; it only falls back to
   the passed options for a fresh or legacy file. That is how a restored session
   keeps working after the config file changes.
@@ -487,13 +491,14 @@ Where to add things:
 │   ├── session/           # conversation state
 │   │   ├── context.ts     # Context class (history, usage, tokens)
 │   │   ├── store.ts       # ContextStore interface + FileContextStore
+│   │   ├── title.ts       # session title from the first user message
 │   │   └── manager.ts     # SessionManager + SessionIndex (per-directory sessions)
 │   ├── models/            # model access
 │   │   ├── providers.ts     # provider table (openai, anthropic, google, compatible)
 │   │   ├── catalog.ts       # model limits from the models.dev catalog
 │   │   └── context-window.ts# context-window resolution for a Context
 │   ├── commands/          # core slash commands
-│   │   └── commands.ts    # registry + parse + quit/help/model/models
+│   │   └── commands.ts    # registry + parse + quit/help/model/models/resume
 │   ├── logging/
 │   │   └── logger.ts      # pino setup: destinations, levels, module children
 │   ├── app/               # bootstrap + composition

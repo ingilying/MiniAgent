@@ -1,8 +1,10 @@
-import { Box, Text, useStdout } from 'ink'
+import { Box, Text } from 'ink'
 import { Fragment } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 
+import { useColumns } from './terminal.js'
 import { theme } from './theme.js'
+import { displayWidth } from './width.js'
 
 /** One inline run of text with at most one style. */
 export interface Span {
@@ -367,22 +369,6 @@ function plainOf(cell: string): string {
     .join('')
 }
 
-/** Terminal columns a string takes: wide characters count two. */
-function displayWidth(text: string): number {
-  let width = 0
-  for (const char of text) {
-    if (/[\u0300-\u036F]/.test(char)) {
-      continue
-    }
-    width += WIDE.test(char) ? 2 : 1
-  }
-  return width
-}
-
-/** East Asian wide and emoji ranges: two columns each. */
-const WIDE =
-  /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6]|[\u{1F300}-\u{1FAFF}]|[\u{20000}-\u{3FFFD}]/u
-
 /** Splits inline Markdown into styled spans. */
 export function inlineSpans(text: string): Span[] {
   const spans: Span[] = []
@@ -431,8 +417,7 @@ function BlockView({
   prefix?: ReactNode
   suffix?: ReactNode
 }): ReactElement {
-  const { stdout } = useStdout()
-  const columns = (stdout as { columns?: number }).columns ?? 80
+  const columns = useColumns()
   switch (block.kind) {
     case 'paragraph':
       return (
@@ -457,7 +442,13 @@ function BlockView({
       )
     case 'code':
       return (
-        <Box borderStyle="round" borderDimColor flexDirection="column" paddingX={1}>
+        <Box
+          borderStyle="round"
+          borderDimColor
+          flexDirection="column"
+          paddingX={1}
+          width={Math.max(24, columns - 4)}
+        >
           {block.lang.length > 0 && <Text dimColor>{block.lang}</Text>}
           <Text color={theme.code}>{block.text}</Text>
         </Box>

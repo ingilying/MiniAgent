@@ -7,10 +7,13 @@ import {
   modelsCommand,
   parseCommand,
   quitCommand,
+  newCommand,
+  resumeCommand,
   type Command,
   type CommandContext,
   type SessionIdentity,
 } from '../../src/commands/commands.js'
+import type { SessionInfo } from '../../src/session/manager.js'
 
 function ctx(
   current: SessionIdentity = { providerId: 'openai', modelId: 'gpt-6-astra' },
@@ -19,30 +22,50 @@ function ctx(
     modelId: 'other',
     contextWindow: undefined,
   }),
-  extra: { providers?: readonly string[]; knownModels?: readonly string[] } = {},
+  extra: {
+    providers?: readonly string[]
+    knownModels?: readonly string[]
+    sessionId?: string
+    sessions?: readonly SessionInfo[]
+  } = {},
 ): {
   context: CommandContext
   quit: Mock
   notice: Mock
   switchModel: Mock
+  resume: Mock
+  newSession: Mock
 } {
   const quit = vi.fn()
   const notice = vi.fn()
   const switcher = vi.fn(switchModel)
+  const resume = vi.fn(async () => {})
+  const newSession = vi.fn(async () => 'new-session')
   return {
     context: {
       commands: [],
       current,
+      sessionId: extra.sessionId,
+      sessions: extra.sessions ?? [],
       providers: extra.providers ?? ['openai', 'deepseek'],
       knownModels: extra.knownModels ?? [],
       quit,
       notice,
+      resume,
+      newSession,
       switchModel: switcher,
     },
     quit,
     notice,
     switchModel: switcher,
+    resume,
+    newSession,
   }
+}
+
+/** One stored session entry, for the session commands. */
+function session(id: string, updatedAt = '2026-10-18T19:00:00.000Z', title?: string): SessionInfo {
+  return { id, cwd: '/p', createdAt: updatedAt, updatedAt, title }
 }
 
 describe('parseCommand', () => {
@@ -267,6 +290,86 @@ describe('built-in commands', () => {
 
     const [text] = notice.mock.calls[0] as [string]
     expect(text.split('\n')).toEqual(['Models (3):', '  openai/b', '  openai/z', '  deepseek/a'])
+  })
+
+  it('new starts a session and reports its id', async () => {
+    const { context, notice, newSession } = ctx()
+
+    await newCommand.run([], context)
+
+    expect(newSession).toHaveBeenCalledTimes(1)
+    expect(notice).toHaveBeenCalledWith('Started new-session.')
+  })
+
+  it('new takes no arguments', async () => {
+    const { context, notice, newSession } = ctx()
+
+    await newCommand.run(['extra'], context)
+
+    expect(newSession).not.toHaveBeenCalled()
+    expect(notice).toHaveBeenCalledWith('Usage: /new')
+  })
+
+  it('resume lists stored sessions and marks the current one', () => {
+    const { context, notice } = ctx(undefined, undefined, {
+      sessionId: 'session-b',
+      sessions: [session('session-a', undefined, 'Fix the login bug'), session('session-b')],
+    })
+
+    resumeCommand.run([], context)
+
+    const [text] = notice.mock.calls[0] as [string]
+    expect(text).toContain('Sessions:')
+    expect(text).toContain('session-a')
+    expect(text).toContain('Fix the login bug')
+    expect(text).toContain('(untitled)')
+    expect(text).toMatch(/\* session-b/)
+  })
+
+  it('resume says so when nothing is stored', () => {
+    const { context, notice } = ctx()
+    resumeCommand.run([], context)
+
+    expect(notice).toHaveBeenCalledWith('No stored sessions in this directory.')
+  })
+
+  it('resume switches by a unique id prefix', async () => {
+    const { context, notice, resume } = ctx(undefined, undefined, {
+      sessionId: 'elsewhere',
+      sessions: [session('abc12345'), session('def67890')],
+    })
+
+    await resumeCommand.run(['abc'], context)
+
+    expect(resume).toHaveBeenCalledWith('abc12345')
+    expect(notice).toHaveBeenCalledWith('Resumed abc12345.')
+  })
+
+  it('resume reports an unknown id and an ambiguous prefix', async () => {
+    const { context, notice, resume } = ctx(undefined, undefined, {
+      sessions: [session('aaa-1'), session('aaa-2')],
+    })
+
+    await resumeCommand.run(['zzz'], context)
+    await resumeCommand.run(['aaa'], context)
+
+    expect(resume).not.toHaveBeenCalled()
+    expect(notice).toHaveBeenNthCalledWith(1, 'Unknown session "zzz". /resume lists them.')
+    const [ambiguous] = notice.mock.calls[1] as [string]
+    expect(ambiguous).toContain('"aaa" matches 2 sessions:')
+    expect(ambiguous).toContain('aaa-1')
+  })
+
+  it('resume skips the session it is already on', async () => {
+    const { context, notice, resume } = ctx(undefined, undefined, {
+      sessionId: 'abc12345',
+      sessions: [session('abc12345')],
+    })
+
+    await resumeCommand.run(['abc'], context)
+
+    expect(resume).not.toHaveBeenCalled()
+    expect(notice).toHaveBeenCalledWith('Already on abc12345.')
   })
 
   it('models says so when the cache is empty', () => {

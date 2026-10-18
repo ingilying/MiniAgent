@@ -1,3 +1,5 @@
+import type { ModelMessage } from 'ai'
+
 import type { AgentEvent } from '../../../agent/agent.js'
 
 /**
@@ -181,6 +183,102 @@ export function applyEvent(
     default:
       return state
   }
+}
+
+/**
+ * Replays a stored conversation into finished rows: prompts, answers, and one
+ * tool row per call paired with the result that followed it. Used when a
+ * frontend attaches to an existing session.
+ */
+export function appendHistory(
+  state: TranscriptState,
+  messages: readonly ModelMessage[],
+  makeId: () => string,
+): TranscriptState {
+  const flushed = flushAll(state, makeId)
+  const lines: TranscriptLine[] = [...flushed.lines]
+  const calls = new Map<string, { toolName: string; input: unknown }>()
+
+  const push = (row: WithoutId): void => {
+    lines.push({ ...row, id: makeId() } as TranscriptLine)
+  }
+
+  for (const message of messages) {
+    if (message.role === 'user' || message.role === 'system') {
+      const text = textOfContent(message.content)
+      if (text.trim().length > 0 && message.role === 'user') {
+        push({ kind: 'user', text })
+      }
+      continue
+    }
+    const parts = partsOf(message.content)
+    if (message.role === 'assistant') {
+      const text = textOfContent(message.content)
+      if (text.trim().length > 0) {
+        push({ kind: 'assistant', text })
+      }
+      for (const part of parts) {
+        if (part.type === 'tool-call' && typeof part.toolCallId === 'string') {
+          calls.set(part.toolCallId, {
+            toolName: typeof part.toolName === 'string' ? part.toolName : 'tool',
+            input: part.input,
+          })
+        }
+      }
+      continue
+    }
+    for (const part of parts) {
+      if (part.type !== 'tool-result' || typeof part.toolCallId !== 'string') {
+        continue
+      }
+      const called = calls.get(part.toolCallId)
+      calls.delete(part.toolCallId)
+      push({
+        kind: 'tool',
+        toolName: typeof part.toolName === 'string' ? part.toolName : (called?.toolName ?? 'tool'),
+        input: called?.input,
+        output: outputOf(part.output),
+        isError: false,
+        spaced: lines.at(-1)?.kind !== 'tool',
+      })
+    }
+  }
+  return { ...emptyTranscript(), lines }
+}
+
+/** One transcript row without its id, union distribution preserved. */
+type WithoutId = TranscriptLine extends infer Row
+  ? Row extends TranscriptLine
+    ? Omit<Row, 'id'>
+    : never
+  : never
+
+/** Parts of a message's content, when it is a part array. */
+function partsOf(content: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(content)
+    ? content.filter(
+        (part): part is Record<string, unknown> => typeof part === 'object' && part !== null,
+      )
+    : []
+}
+
+/** Text of a message's content, string or part array. */
+function textOfContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content
+  }
+  return partsOf(content)
+    .filter((part) => part.type === 'text')
+    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .join('')
+}
+
+/** A stored tool output is `{ type, value }`; show the value. */
+function outputOf(output: unknown): unknown {
+  if (typeof output === 'object' && output !== null && 'value' in output) {
+    return (output as { value: unknown }).value
+  }
+  return output
 }
 
 /** Moves pending reasoning and answer text into finished rows. */

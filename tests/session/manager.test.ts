@@ -11,7 +11,7 @@ import { Agent } from '../../src/agent/agent.js'
 import { App } from '../../src/app/app.js'
 import { Context } from '../../src/session/context.js'
 import pino from 'pino'
-import type { Providers } from '../../src/models/providers.js'
+import { Providers } from '../../src/models/providers.js'
 import { SessionManager } from '../../src/session/manager.js'
 import { FileContextStore } from '../../src/session/store.js'
 
@@ -33,6 +33,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await rm(root, { recursive: true, force: true })
 })
 
@@ -191,6 +192,32 @@ describe('SessionManager', () => {
     expect(reloadedA.listHistory()).toHaveLength(1)
     expect(reloadedB.listHistory()).toHaveLength(0)
     expect(reloadedA.listHistory()[0]?.id).toBe(sessionA.id)
+  })
+
+  it('stores a session title in the index', async () => {
+    const manager = await managerFor(projectA)
+    const context = await manager.createSession()
+    context.addUser('hello')
+
+    expect(await manager.setTitle(context.id, 'Greeting session')).toBe(true)
+    expect(manager.listHistory()[0]?.title).toBe('Greeting session')
+
+    const reopened = await managerFor(projectA)
+    expect(reopened.listHistory()[0]?.title).toBe('Greeting session')
+    await manager.shutdown()
+  })
+
+  it('normalises, caps, and rejects titles for unknown sessions', async () => {
+    const manager = await managerFor(projectA)
+    const context = await manager.createSession()
+
+    expect(await manager.setTitle('no-such-session', 'x')).toBe(false)
+    expect(await manager.setTitle(context.id, '  a\n\nb  ')).toBe(true)
+    expect(manager.listHistory()[0]?.title).toBe('a b')
+
+    expect(await manager.setTitle(context.id, 'y'.repeat(200))).toBe(true)
+    expect(manager.listHistory()[0]?.title).toHaveLength(48)
+    await manager.shutdown()
   })
 
   it('gets stored sessions and misses unknown ids', async () => {
@@ -509,6 +536,93 @@ describe('App multi-session', () => {
     for (const line of raw) {
       expect(line.match(/"module"/g)).toHaveLength(1)
     }
+  })
+
+  /** Boots an app whose plugin titles the session, then reads it back. */
+  async function titledByProbe(firstMessage: string): Promise<string | undefined> {
+    await mkdir(dataDirectory, { recursive: true })
+    await writeFile(
+      join(dataDirectory, 'title-probe.mjs'),
+      `export default {
+        name: 'title-probe',
+        async run(host) {
+          host.context.addUser(${JSON.stringify(firstMessage)})
+          await host.titleSession(host.sessionId, ${JSON.stringify(firstMessage)})
+        },
+      };`,
+      'utf8',
+    )
+    const configFile = join(dataDirectory, 'config.json')
+    await writeFile(configFile, JSON.stringify({ plugins: ['./title-probe.mjs'] }), 'utf8')
+    const app = new App({
+      env: { MINIAGENT_CONTEXT_WINDOW: '1000' },
+      envFile: false,
+      configFile,
+      dataDirectory,
+      cwd: projectA,
+      logger: pino({ level: 'silent', base: undefined }, sink().stream),
+    })
+    expect(await app.run()).toBe(0)
+    return (await managerFor(projectA)).listHistory()[0]?.title
+  }
+
+  it('titles a session with the model answer when one comes back', async () => {
+    vi.spyOn(Providers.prototype, 'createModel').mockReturnValue(
+      new MockLanguageModelV4({
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: 'Login bug fix' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage,
+          warnings: [],
+        }),
+      }),
+    )
+
+    expect(await titledByProbe('fix the login bug in the TUI menu please')).toBe('Login bug fix')
+  })
+
+  it('uses a fenced model answer as the title', async () => {
+    vi.spyOn(Providers.prototype, 'createModel').mockReturnValue(
+      new MockLanguageModelV4({
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: '```\nLogin bug fix\n```' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage,
+          warnings: [],
+        }),
+      }),
+    )
+
+    expect(await titledByProbe('fix the login bug in the TUI menu please')).toBe('Login bug fix')
+  })
+
+  it('keeps the truncated title when the model answers nothing', async () => {
+    vi.spyOn(Providers.prototype, 'createModel').mockReturnValue(
+      new MockLanguageModelV4({
+        doGenerate: async () => ({
+          content: [{ type: 'text', text: '   ' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage,
+          warnings: [],
+        }),
+      }),
+    )
+
+    expect(await titledByProbe('fix the login bug in the TUI menu please')).toBe(
+      'fix the login bug in the TUI menu please',
+    )
+  })
+
+  it('keeps the truncated title when the model cannot title', async () => {
+    vi.spyOn(Providers.prototype, 'createModel').mockReturnValue(
+      new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw new Error('no model')
+        },
+      }),
+    )
+
+    expect(await titledByProbe('# Fix the **login** bug\n\nmore detail')).toBe('Fix the login bug')
   })
 
   it('binds built agents to the agent module', async () => {

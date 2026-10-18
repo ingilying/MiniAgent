@@ -10,6 +10,7 @@ import {
   toolView,
   type ToolViewProps,
 } from '../../../../src/plugins/builtin/tui/tool-views.js'
+import { displayWidth } from '../../../../src/plugins/builtin/tui/width.js'
 
 /** Renders one tool view with Ink in debug mode (plain text, no ANSI). */
 async function draw(props: Partial<ToolViewProps> & { toolName: string }): Promise<string> {
@@ -158,6 +159,55 @@ describe('tool views', () => {
     expect(frame).toContain('all green')
     // The command lives in the box, not in the header.
     expect(frame).not.toContain('⏺ shell(pnpm test)')
+  })
+
+  it('keeps a long shell command inside the box', async () => {
+    const command = `curl -sL "${'x'.repeat(200)}" | python3 -c "print(1)"`
+    const frame = await draw({
+      toolName: 'shell',
+      input: { command },
+      output: { command, exitCode: 0, stdout: 'ok\n' },
+    })
+    const lines = frame.split('\n').filter((line) => line.length > 0)
+    const box = lines.filter((line) => /^[│╭╰]/.test(line))
+
+    expect(box.length).toBeGreaterThan(2)
+    // Every border line ends at the same column, so the grid is closed.
+    const widths = new Set(box.map((line) => line.length))
+    expect(widths.size).toBe(1)
+    expect(Math.max(...widths)).toBeLessThanOrEqual(80)
+    expect(frame).toContain('…')
+  })
+
+  it('keeps wide characters inside the box', async () => {
+    const command = `echo ${'读取文件内容'.repeat(20)}`
+    const frame = await draw({
+      toolName: 'shell',
+      input: { command },
+      output: { command, exitCode: 0, stdout: '完成\n' },
+    })
+    const box = frame
+      .split('\n')
+      .filter((line) => /^[│╭╰]/.test(line))
+      .map((line) => displayWidth(line))
+
+    expect(box.length).toBeGreaterThan(2)
+    expect(Math.max(...box)).toBeLessThanOrEqual(80)
+  })
+
+  it('folds a long command after six lines', async () => {
+    const command = Array.from({ length: 12 }, (_unused, index) => `echo ${index + 1}`).join('\n')
+
+    const frame = await draw({
+      toolName: 'shell',
+      input: { command },
+      output: { command, exitCode: 0, stdout: 'done\n' },
+    })
+
+    expect(frame).toContain('$ echo 1')
+    expect(frame).toContain('echo 6')
+    expect(frame).not.toContain('echo 7')
+    expect(frame).toContain('… +6 more lines')
   })
 
   it('folds a shell result past ten lines', async () => {

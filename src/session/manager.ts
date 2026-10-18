@@ -8,12 +8,15 @@ import { Context } from './context.js'
 import { resolveContextWindow } from '../models/context-window.js'
 import type { Logger } from 'pino'
 import { CorruptSnapshotError, type ContextStore } from './store.js'
+import { TITLE_MAX_LENGTH } from './title.js'
 
 const sessionInfoSchema = z.object({
   id: z.string().min(1),
   cwd: z.string().min(1),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
+  /** Title written from the session's first user message, when it has one. */
+  title: z.string().min(1).optional().catch(undefined),
 })
 
 const sessionIndexFileSchema = z.object({
@@ -105,6 +108,21 @@ export class SessionManager {
   /** All sessions of this directory, newest first. */
   listHistory(): readonly SessionInfo[] {
     return this.index.list()
+  }
+
+  /**
+   * Stores a title for an indexed session, replacing the previous one.
+   * Returns whether the session is known. Does not touch `updatedAt`: a
+   * title is metadata, not activity.
+   */
+  async setTitle(id: string, title: string): Promise<boolean> {
+    const clean = title.replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX_LENGTH)
+    if (clean.length === 0 || !this.index.setTitle(id, clean)) {
+      return false
+    }
+    await this.index.save()
+    this.logger?.debug(`titled ${id}: ${clean}`)
+    return true
   }
 
   /**
@@ -336,6 +354,16 @@ export class SessionIndex {
     } else {
       this.entries[this.entries.indexOf(existing)] = { ...existing, updatedAt: now }
     }
+  }
+
+  /** Sets the title of a known session. Returns whether it is indexed. */
+  setTitle(id: string, title: string): boolean {
+    const existing = this.entries.find((entry) => entry.id === id)
+    if (existing === undefined) {
+      return false
+    }
+    this.entries[this.entries.indexOf(existing)] = { ...existing, title }
+    return true
   }
 
   drop(id: string): void {
