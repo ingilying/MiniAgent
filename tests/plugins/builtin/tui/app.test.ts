@@ -209,6 +209,9 @@ async function harness(
     stdin: stdin as never,
     stderr: sink() as never,
     patchConsole: false,
+    // Ink disables live frames in CI even for a fake TTY; these tests need
+    // the interactive renderer (input box, menus) to be painted.
+    interactive: true,
   })
   const frames = (): string => chunks.join('').replace(stripAnsi(), '')
   return {
