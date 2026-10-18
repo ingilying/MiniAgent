@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { Agent, type AgentEvent } from '../../src/agent/agent.js'
 import { Context } from '../../src/session/context.js'
-import { CorruptSnapshotError, FileContextStore } from '../../src/session/store.js'
+import {
+  CorruptSnapshotError,
+  FileContextStore,
+  SESSION_LOG_VERSION,
+} from '../../src/session/store.js'
 
 const usage = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
@@ -311,5 +315,202 @@ describe('Context persistence', () => {
 
     expect(context.messageCount).toBe(2)
     expect(await store.load('session-1')).toBeUndefined()
+  })
+})
+
+describe('Append-only session log', () => {
+  let directory: string
+
+  beforeEach(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'miniagent-log-'))
+  })
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  async function recordsOf(id: string): Promise<Array<Record<string, unknown>>> {
+    const text = await readFile(join(directory, `${id}.json`), 'utf8')
+    return text
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+  }
+
+  it('appends one record per turn instead of rewriting the file', async () => {
+    const store = new FileContextStore(directory)
+    const context = await Context.load(store, 'session-1')
+
+    context.addUser('one')
+    await context.save()
+    context.addUser('two')
+    await context.save()
+
+    const records = await recordsOf('session-1')
+    expect(records.map((record) => record.type)).toEqual(['session', 'turn', 'turn'])
+    expect(records[0]).toMatchObject({ version: SESSION_LOG_VERSION, id: 'session-1' })
+    expect((await Context.load(store, 'session-1')).messages).toEqual(context.messages)
+  })
+
+  it('keeps the usage and identity of the last turn', async () => {
+    const store = new FileContextStore(directory)
+    const context = await Context.load(store, 'session-1')
+    context.providerId = 'deepseek'
+    context.modelId = 'deepseek-v4'
+    context.recordUsage({ inputTokens: 7, outputTokens: 3 })
+    context.addUser('hi')
+
+    await context.save()
+
+    const restored = await Context.load(store, 'session-1')
+    expect(restored.usage).toEqual({
+      inputTokens: 7,
+      outputTokens: 3,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    })
+    expect(restored.providerId).toBe('deepseek')
+    expect(restored.modelId).toBe('deepseek-v4')
+  })
+
+  it('compacts the log into one snapshot on save({ compact: true })', async () => {
+    const store = new FileContextStore(directory)
+    const context = await Context.load(store, 'session-1')
+    context.addUser('one')
+    await context.save()
+    context.addUser('two')
+    await context.save()
+
+    await context.save({ compact: true })
+
+    const records = await recordsOf('session-1')
+    expect(records.map((record) => record.type)).toEqual(['session', 'snapshot'])
+    expect((await Context.load(store, 'session-1')).messages).toHaveLength(2)
+  })
+
+  it('compacts by itself when the history shrank', async () => {
+    const store = new FileContextStore(directory)
+    const context = await Context.load(store, 'session-1')
+    context.addUser('one')
+    await context.save()
+
+    context.clear()
+    await context.save()
+
+    expect((await recordsOf('session-1')).map((record) => record.type)).toEqual([
+      'session',
+      'snapshot',
+    ])
+    expect((await store.load('session-1'))?.messages).toEqual([])
+  })
+
+  it('migrates a legacy message array on the first append', async () => {
+    const store = new FileContextStore(directory)
+    const messages = [{ role: 'user' as const, content: 'old' }]
+    await writeFile(join(directory, 'legacy.json'), JSON.stringify(messages, null, 2), 'utf8')
+
+    const context = await Context.load(store, 'legacy')
+    expect(context.messageCount).toBe(1)
+    context.addUser('new')
+    await context.save()
+
+    const records = await recordsOf('legacy')
+    expect(records.map((record) => record.type)).toEqual(['session', 'snapshot', 'turn'])
+    expect((await Context.load(store, 'legacy')).messages).toHaveLength(2)
+  })
+
+  it('migrates a legacy snapshot object on the first append', async () => {
+    const store = new FileContextStore(directory)
+    const snapshot = {
+      messages: [{ role: 'user', content: 'old' }],
+      usage: { inputTokens: 9, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      providerId: 'openai',
+      modelId: 'gpt-6-astra',
+    }
+    await writeFile(join(directory, 'legacy.json'), JSON.stringify(snapshot, null, 2), 'utf8')
+
+    const restored = await Context.load(store, 'legacy')
+    expect(restored.modelId).toBe('gpt-6-astra')
+    expect(restored.tokenCount).toBe(11)
+    restored.addUser('new')
+    await restored.save()
+
+    expect((await recordsOf('legacy')).map((record) => record.type)).toEqual([
+      'session',
+      'snapshot',
+      'turn',
+    ])
+    const reloaded = await Context.load(store, 'legacy')
+    expect(reloaded.messages).toHaveLength(2)
+    expect(reloaded.modelId).toBe('gpt-6-astra')
+  })
+
+  it('drops a torn last line and repairs the file before appending', async () => {
+    const store = new FileContextStore(directory)
+    const context = await Context.load(store, 'session-1')
+    context.addUser('one')
+    await context.save()
+
+    const file = join(directory, 'session-1.json')
+    await appendFile(file, '{"type":"turn","messages":[{"role":"user","cont', 'utf8')
+
+    // The half-written line is ignored on load...
+    expect((await Context.load(store, 'session-1')).messageCount).toBe(1)
+
+    // ...and dropped before the next append, so the log stays parseable.
+    context.addUser('two')
+    await context.save()
+
+    expect((await Context.load(store, 'session-1')).messageCount).toBe(2)
+    expect(await recordsOf('session-1')).toHaveLength(3)
+  })
+
+  it('skips record types it does not know', async () => {
+    const store = new FileContextStore(directory)
+    await writeFile(
+      join(directory, 'extra.json'),
+      [
+        JSON.stringify({ type: 'session', version: SESSION_LOG_VERSION, id: 'extra' }),
+        JSON.stringify({ type: 'turn', messages: [{ role: 'user', content: 'hi' }] }),
+        JSON.stringify({ type: 'annotation', note: 'from a newer build' }),
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+
+    expect((await store.load('extra'))?.messages).toHaveLength(1)
+  })
+
+  it('refuses a log written by a newer format version', async () => {
+    const store = new FileContextStore(directory)
+    const file = join(directory, 'future.json')
+    await writeFile(
+      file,
+      `${JSON.stringify({
+        type: 'session',
+        version: SESSION_LOG_VERSION + 1,
+        id: 'future',
+      })}\n`,
+      'utf8',
+    )
+
+    await expect(store.load('future')).rejects.toThrow(/Unsupported session log version 2/)
+    // The bytes belong to a newer build, so the file stays where it is.
+    expect(await readdir(directory)).toEqual(['future.json'])
+  })
+
+  it('quarantines a malformed turn record', async () => {
+    const store = new FileContextStore(directory)
+    await writeFile(
+      join(directory, 'bad.json'),
+      [
+        JSON.stringify({ type: 'session', version: SESSION_LOG_VERSION, id: 'bad' }),
+        '{"type":"turn","messages":"nope"}',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+
+    await expect(store.load('bad')).rejects.toBeInstanceOf(CorruptSnapshotError)
   })
 })

@@ -55,9 +55,10 @@ export interface SessionManagerOptions {
  * to `cwd`. Several sessions can be open at once, each driven by its own
  * agent (see `App.agentFor`).
  *
- * Sessions are only written to the store on `close()` / `shutdown()` and
- * only when they hold at least one message, so opening an instance never
- * leaves an empty file behind.
+ * Sessions are appended to the store turn by turn: every finished run adds
+ * one record, so a crash loses at most the turn in flight. `close()` compacts
+ * the log into a single snapshot, and an empty session never leaves a file
+ * behind.
  */
 export class SessionManager {
   private readonly open = new Map<string, Context>()
@@ -108,8 +109,8 @@ export class SessionManager {
 
   /**
    * Opens a new session for this directory: a fresh, store-bound context
-   * with a generated id. Nothing is written to the store until `close()`
-   * or `shutdown()`.
+   * with a generated id. Nothing is written to the store until its first
+   * finished run.
    */
   async createSession(): Promise<Context> {
     const context = await this.loadContext(randomUUID())
@@ -173,9 +174,9 @@ export class SessionManager {
   }
 
   /**
-   * Closes one session: saves it when it holds messages, otherwise deletes
-   * any stored file and drops the index entry. Closing an unknown id is a
-   * no-op. Returns whether anything was saved.
+   * Closes one session: compacts its log when it holds messages, otherwise
+   * deletes any stored file and drops the index entry. Closing an unknown id
+   * is a no-op. Returns whether anything was saved.
    */
   async close(id: string): Promise<boolean> {
     const context = this.open.get(id)
@@ -190,7 +191,7 @@ export class SessionManager {
     }
     this.open.delete(id)
     if (context.messageCount > 0) {
-      await context.save()
+      await context.save({ compact: true })
       this.index.touch(id)
       this.logger?.debug(`saved ${id}`)
     } else {
@@ -244,7 +245,7 @@ export class SessionManager {
   private loadContext(id: string): Promise<Context> {
     return Context.load(this.store, id, {
       ...this.contextDefaults(),
-      autoSave: false,
+      autoSave: true,
     }).catch((error: unknown) => {
       if (!(error instanceof CorruptSnapshotError)) {
         throw error
@@ -252,7 +253,7 @@ export class SessionManager {
       this.warnIfCorrupt(id, error)
       return Context.load(this.store, id, {
         ...this.contextDefaults(),
-        autoSave: false,
+        autoSave: true,
       })
     })
   }

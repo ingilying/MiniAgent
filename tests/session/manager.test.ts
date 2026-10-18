@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Writable } from 'node:stream'
@@ -144,8 +144,8 @@ describe('SessionManager', () => {
     expect(history[0]?.cwd).toBe(projectA)
     expect(empty.id).not.toBe(kept.id)
 
-    const raw = JSON.parse(await readFile(join(dataDirectory, 'contexts', files[0]!), 'utf8'))
-    expect(raw.messages).toHaveLength(1)
+    const restored = await new FileContextStore(join(dataDirectory, 'contexts')).load(kept.id)
+    expect(restored?.messages).toHaveLength(1)
   })
 
   it('runs several sessions at once and saves each on shutdown', async () => {
@@ -161,6 +161,19 @@ describe('SessionManager', () => {
 
     expect(await contextFiles()).toHaveLength(2)
     expect(manager.listHistory()).toHaveLength(2)
+  })
+
+  it('writes each finished run without waiting for close', async () => {
+    const manager = await managerFor(projectA)
+    const context = await manager.createSession()
+    const agent = new Agent({ model: echoModel(), context })
+
+    await agent.run('survive a crash')
+
+    // Still open, yet the turn is already on disk for the next process.
+    const restored = await (await managerFor(projectA)).get(context.id)
+    expect(restored?.messages.map((message) => message.role)).toEqual(['user', 'assistant'])
+    await manager.shutdown()
   })
 
   it('keeps one history per directory in the global data directory', async () => {

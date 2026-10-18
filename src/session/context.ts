@@ -40,6 +40,14 @@ export interface ContextOptions {
   modelId?: string
 }
 
+export interface SaveOptions {
+  /**
+   * Rewrite the stored history as one snapshot instead of appending the
+   * messages added since the last save. Keeps a long session's log small.
+   */
+  readonly compact?: boolean
+}
+
 /**
  * Conversation history for an agent.
  *
@@ -79,6 +87,8 @@ export interface ContextOptions {
 export class Context {
   private readonly history: ModelMessage[]
   private lastUsage: ContextUsage | undefined
+  /** Messages already written to the store; the rest is the next append. */
+  private persistedCount = 0
 
   /**
    * Store this context is bound to, if any.
@@ -248,19 +258,42 @@ export class Context {
     if (this.lastUsage !== undefined) {
       copy.lastUsage = { ...this.lastUsage }
     }
+    copy.persistedCount = this.persistedCount
     return copy
   }
 
   /**
-   * Persist the history and the last usage to the bound store.
+   * Persist the history to the bound store.
+   *
+   * By default the messages added since the last save are appended as one
+   * turn, so a run that already finished is on disk even if the process dies
+   * later. With `compact`, the whole history is rewritten as a single
+   * snapshot instead. Such a rewrite also happens on its own when the
+   * history shrank (after `clear()` or `truncate()`), because the log then
+   * holds messages the context no longer has.
    */
-  async save(): Promise<void> {
+  async save(options: SaveOptions = {}): Promise<void> {
     if (this.store === undefined) {
       throw new Error(
         'Context is not bound to a store. Pass { store } to the constructor or use Context.load().',
       )
     }
-    await this.store.save(this.id, this.snapshot())
+    const compact = options.compact === true || this.history.length < this.persistedCount
+    if (compact) {
+      await this.store.save(this.id, this.snapshot())
+      this.persistedCount = this.history.length
+      return
+    }
+    if (this.history.length === this.persistedCount) {
+      return
+    }
+    await this.store.append(this.id, {
+      messages: this.history.slice(this.persistedCount),
+      usage: this.usage,
+      providerId: this.providerId,
+      modelId: this.modelId,
+    })
+    this.persistedCount = this.history.length
   }
 
   /**
@@ -287,6 +320,7 @@ export class Context {
     if (snapshot?.usage !== undefined) {
       context.lastUsage = { ...snapshot.usage }
     }
+    context.persistedCount = snapshot?.messages.length ?? 0
     return context
   }
 

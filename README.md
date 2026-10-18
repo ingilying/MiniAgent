@@ -232,7 +232,8 @@ appended when the run errors.
 ### Persistence
 
 A `Context` can be bound to a `ContextStore` and an id. The agent then
-auto-saves the history after every run, and `Context.load()` restores it:
+appends each finished run to the stored history, and `Context.load()`
+restores it:
 
 ```ts
 import { Context } from './context.js'
@@ -251,17 +252,30 @@ const agent = new Agent({ model, context })
 for await (const event of agent.stream('What is 6 * 7?')) {
   /* ... */
 }
-// → auto-saved to .miniagent/contexts/user-123.json
+// → appended to .miniagent/contexts/user-123.json
 
 // later, in another process:
 const resumed = await Context.load(store, 'user-123')
 console.log(resumed.messageCount) // history is back
 ```
 
-- `FileContextStore` writes one JSON file per context id (holding the messages,
-  the last reported usage, and the provider and model the session runs on),
-  atomically (temp file + rename), and sanitizes ids so they cannot escape the
-  directory.
+- `FileContextStore` keeps one JSON Lines file per context id: a header
+  (`type: "session"`, `version`, `id`, `createdAt`), then one line per
+  finished turn holding the messages it added, the usage it reported, and the
+  provider and model it ran on. Each run appends; nothing is rewritten, so a
+  crash loses at most the turn in flight.
+- The header carries the format version (`SESSION_LOG_VERSION`, currently
+  `1`). A file from a newer version is refused instead of rewritten. Files in
+  the older single-object format — a bare message array or one snapshot
+  object — still load, and the next append migrates them to the log.
+- `save()` appends the messages added since the last save. `save({ compact:
+true })` rewrites the whole history as one `snapshot` record instead;
+  `SessionManager.close()` does that when a session ends, so its log stays
+  small. A rewrite also happens by itself after `clear()` or `truncate()`,
+  because the log then holds messages the context no longer has.
+- Compaction writes are atomic (temp file + rename). An append is a single
+  `appendFile`; its one failure mode is a torn last line, which `load()`
+  ignores and the next append drops before writing.
 - A history file that exists but cannot be read is quarantined aside
   (`<id>.json.corrupt-<timestamp>`) instead of loading as empty, and the
   session starts fresh with a warning. Missing files still mean empty.
@@ -274,7 +288,8 @@ console.log(resumed.messageCount) // history is back
 - `save()` throws if the context is not bound to a store; `delete(id)` removes
   a stored history. Omit `id` and the context generates one.
 - Any backend works — implement the `ContextStore` interface
-  (`load` / `save` / `delete`) for a database, Redis, object storage, ...
+  (`load` / `save` / `append` / `delete`) for a database, Redis, object
+  storage, ...
 
 ### Token counting
 
